@@ -36,14 +36,14 @@ function mulberry32(seed) {
   };
 }
 
-function calcDamage(seed, hitCount, attackType) {
+function calcDamage(seed, hitCount, attackType, countered) {
+  if (countered) return 5; // Fixed counter damage (GUARD reflects STRIKE)
   const rng = mulberry32(seed + hitCount * 7919);
   const r = rng();
   switch (attackType) {
-    case 0: return 8 + r * 5;   // slap: 8-13
-    case 1: return 12 + r * 6;  // slide: 12-18
-    case 2: return 15 + r * 8;  // flop: 15-23
-    default: return 10;
+    case 0: return 6 + r * 4;   // SLAP: 6-10 (fast, pierces GUARD)
+    case 1: return 14 + r * 6;  // STRIKE: 14-20 (strong, blocked by GUARD)
+    default: return 0;           // GUARD: no damage
   }
 }
 
@@ -181,8 +181,9 @@ exports.handler = async (event) => {
       const room = (await ddb.send(new GetCommand({ TableName: TABLE, Key: { roomCode } }))).Item;
       if (!room || room.status !== 'playing') break;
 
+      const countered = !!body.countered;
       const newHitCount = (room.hitCount || 0) + 1;
-      const dmg = calcDamage(room.seed, newHitCount, body.attackType || 0);
+      const dmg = calcDamage(room.seed, newHitCount, body.attackType || 0, countered);
 
       await ddb.send(new UpdateCommand({
         TableName: TABLE,
@@ -191,11 +192,12 @@ exports.handler = async (event) => {
         ExpressionAttributeValues: { ':hc': newHitCount },
       }));
 
-      // Determine target
-      const attacker = room.p1ConnectionId === connectionId ? 'p1' : 'p2';
-      const target = attacker === 'p1' ? 'p2' : 'p1';
+      // Determine target — if countered, damage goes back to the attacker
+      const attackerRole = room.p1ConnectionId === connectionId ? 'p1' : 'p2';
+      const defenderRole = attackerRole === 'p1' ? 'p2' : 'p1';
+      const target = countered ? attackerRole : defenderRole;
 
-      const dmgMsg = { type: 'damage', target, dmg: Math.round(dmg * 10) / 10, hitNum: newHitCount };
+      const dmgMsg = { type: 'damage', target, dmg: Math.round(dmg * 10) / 10, hitNum: newHitCount, countered };
       await sendTo(api, room.p1ConnectionId, dmgMsg);
       await sendTo(api, room.p2ConnectionId, dmgMsg);
       break;

@@ -25,6 +25,7 @@ canvas {
   border: 3px solid #4a90d9;
   border-radius: 8px;
   box-shadow: 0 0 30px rgba(74, 144, 217, 0.3);
+  touch-action: manipulation;
 }
 
 /* Lobby overlay */
@@ -38,7 +39,7 @@ canvas {
   justify-content: center;
   z-index: 20;
   gap: 16px;
-  touch-action: auto;
+  touch-action: manipulation;
 }
 #lobby.hidden { display: none; }
 #lobby h1 {
@@ -178,6 +179,33 @@ canvas {
 .atk-slide { background: rgba(244,166,35,0.4);   border-color: rgba(244,166,35,0.7); }
 .atk-flop  { background: rgba(217,74,74,0.4);    border-color: rgba(217,74,74,0.7); }
 
+/* Rules box */
+#rules-box {
+  margin-top: 8px;
+  padding: 10px 16px;
+  background: rgba(255,255,255,0.06);
+  border-radius: 10px;
+  border: 1px solid rgba(255,255,255,0.1);
+  text-align: center;
+}
+.rules-title {
+  color: rgba(255,255,255,0.5);
+  font-size: 11px;
+  font-weight: bold;
+  letter-spacing: 3px;
+  margin-bottom: 6px;
+}
+.rules-row {
+  font-size: 13px;
+  margin: 3px 0;
+  color: rgba(255,255,255,0.7);
+}
+.r-slap { color: #6eb5ff; font-weight: bold; }
+.r-strike { color: #f4a623; font-weight: bold; }
+.r-guard { color: #ff6b6b; font-weight: bold; }
+.r-arrow { color: rgba(255,255,255,0.3); margin: 0 2px; }
+.r-desc { color: rgba(255,255,255,0.35); font-size: 11px; margin-left: 4px; }
+
 /* Version label */
 #version-label {
   position: fixed;
@@ -212,7 +240,13 @@ canvas {
   <button id="join-btn" disabled>ルームに参加</button>
   <div class="status-msg" id="status-msg"></div>
   <div class="error-msg" id="error-msg"></div>
-  <div id="version-label">v2.0.1</div>
+  <div id="rules-box">
+    <div class="rules-title">RULES</div>
+    <div class="rules-row"><span class="r-slap">SLAP</span> <span class="r-arrow">&gt;</span> <span class="r-guard">GUARD</span> <span class="r-desc">貫通する</span></div>
+    <div class="rules-row"><span class="r-strike">STRIKE</span> <span class="r-arrow">&gt;</span> <span class="r-slap">SLAP</span> <span class="r-desc">高ダメージ</span></div>
+    <div class="rules-row"><span class="r-guard">GUARD</span> <span class="r-arrow">&gt;</span> <span class="r-strike">STRIKE</span> <span class="r-desc">防御+反撃</span></div>
+  </div>
+  <div id="version-label">v2.1.0</div>
 </div>
 
 <div id="mobile-controls">
@@ -223,8 +257,8 @@ canvas {
   </div>
   <div class="attack-buttons">
     <div class="atk-btn atk-slap" data-atk="0">SLAP</div>
-    <div class="atk-btn atk-slide" data-atk="1">SLIDE</div>
-    <div class="atk-btn atk-flop" data-atk="2">FLOP</div>
+    <div class="atk-btn atk-slide" data-atk="1">STRIKE</div>
+    <div class="atk-btn atk-flop" data-atk="2">GUARD</div>
   </div>
 </div>
 
@@ -374,6 +408,14 @@ function handleServerMessage(msg) {
       const target = msg.target === myRole ? myPenguin() : opponentPenguin();
       const attacker = msg.target === myRole ? opponentPenguin() : myPenguin();
       target.takeDamage(msg.dmg, attacker.x);
+      // Show "COUNTER!" text when GUARD reflects STRIKE
+      if (msg.countered) {
+        damageTexts.push({
+          x: target.x, y: target.y - 60,
+          text: 'COUNTER!', life: 50, vy: -1.5,
+          color: '#ff4444'
+        });
+      }
       break;
     }
 
@@ -513,21 +555,20 @@ class Penguin {
     this.isAttacking = true;
     this.attackType = type;
     switch (type) {
-      case 0:
-        this.attackTimer = 12;
-        this.attackCooldown = 20;
+      case 0: // SLAP — fast, low damage, pierces GUARD
+        this.attackTimer = 10;
+        this.attackCooldown = 15;
         break;
-      case 1:
+      case 1: // STRIKE — slow, high damage, blocked by GUARD
+        this.attackTimer = 22;
+        this.attackCooldown = 40;
+        this.vx = this.facing * 8;
+        this.slideTimer = 22;
+        break;
+      case 2: // GUARD — defensive stance, counters STRIKE, weak to SLAP
         this.attackTimer = 20;
         this.attackCooldown = 35;
-        this.vx = this.facing * 8;
-        this.slideTimer = 20;
-        break;
-      case 2:
-        this.attackTimer = 15;
-        this.attackCooldown = 30;
-        this.vy = 6;
-        this.vx = this.facing * 3;
+        // No movement impulse — stay in place
         break;
     }
   }
@@ -535,12 +576,12 @@ class Penguin {
   getAttackBox() {
     if (!this.isAttacking) return null;
     switch (this.attackType) {
-      case 0:
+      case 0: // SLAP
         return { x: this.x + this.facing * 25, y: this.y - 15, w: 30, h: 20 };
-      case 1:
+      case 1: // STRIKE
         return { x: this.x + this.facing * 10, y: this.y + 10, w: 45, h: 20 };
-      case 2:
-        return { x: this.x - 15, y: this.y, w: 30, h: 30 };
+      case 2: // GUARD — no attack hitbox
+        return null;
     }
   }
 
@@ -667,9 +708,13 @@ class Penguin {
           ctx.fill();
         }
       } else if (this.attackType === 2) {
-        ctx.strokeStyle = '#ffdd44'; ctx.lineWidth = 2;
-        const r = (15 - this.attackTimer) * 3;
-        ctx.beginPath(); ctx.arc(0, 5, r, 0, Math.PI * 2); ctx.stroke();
+        // GUARD: shield bubble effect
+        const pulse = Math.sin(this.attackTimer * 0.5) * 0.15 + 0.45;
+        ctx.strokeStyle = `rgba(255, 100, 100, ${pulse})`;
+        ctx.lineWidth = 3;
+        ctx.beginPath(); ctx.arc(0, -15, 30, 0, Math.PI * 2); ctx.stroke();
+        ctx.fillStyle = `rgba(255, 100, 100, ${pulse * 0.2})`;
+        ctx.beginPath(); ctx.arc(0, -15, 30, 0, Math.PI * 2); ctx.fill();
       }
     }
     ctx.restore();
@@ -879,19 +924,28 @@ function applyRemoteState() {
 // ===== ATTACK HIT DETECTION =====
 function checkAttacks(attacker, defender) {
   const atkBox = attacker.getAttackBox();
-  if (!atkBox) return;
-  const expectedFrame = attacker.attackType === 1 ? 15 : attacker.attackType === 2 ? 10 : 8;
+  if (!atkBox) return; // GUARD returns null — no offensive hitbox
+
+  // Hit detection frame: SLAP at frame 6, STRIKE at frame 15
+  const expectedFrame = attacker.attackType === 1 ? 15 : 6;
   if (attacker.attackTimer !== expectedFrame) return;
 
   const hit = Math.abs(atkBox.x - defender.x) < atkBox.w &&
               Math.abs(atkBox.y - (defender.y - 20)) < atkBox.h + 15;
 
   if (hit && attacker.isLocal && ws && ws.readyState === WebSocket.OPEN) {
-    // Report hit to server for authoritative damage
+    // Check rock-paper-scissors interaction
+    const isCountered = attacker.attackType === 1 && // STRIKE
+                        defender.isAttacking && defender.attackType === 2; // vs GUARD
+
+    // SLAP (type 0) pierces GUARD — always hits, no counter check needed
+    // STRIKE (type 1) vs GUARD (type 2) — countered, attacker takes damage
+
     ws.send(JSON.stringify({
       action: 'hit',
       room: roomCode,
       attackType: attacker.attackType,
+      countered: isCountered ? 1 : 0,
     }));
   }
 }
@@ -1025,13 +1079,14 @@ function drawResult() {
   }
 }
 
-// Tap on canvas for result screen
+// Always prevent default on canvas touch (prevents iOS double-tap zoom)
 canvas.addEventListener('touchstart', (e) => {
   e.preventDefault();
   if (gameState === STATE.WIN || gameState === STATE.LOSE) {
     returnToLobby();
   }
 }, { passive: false });
+canvas.addEventListener('touchmove', (e) => { e.preventDefault(); }, { passive: false });
 
 function returnToLobby() {
   gameState = STATE.LOBBY;
