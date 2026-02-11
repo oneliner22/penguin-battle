@@ -246,7 +246,7 @@ canvas {
     <div class="rules-row"><span class="r-strike">STRIKE</span> <span class="r-arrow">&gt;</span> <span class="r-slap">SLAP</span> <span class="r-desc">高ダメージ</span></div>
     <div class="rules-row"><span class="r-guard">GUARD</span> <span class="r-arrow">&gt;</span> <span class="r-strike">STRIKE</span> <span class="r-desc">防御+反撃</span></div>
   </div>
-  <div id="version-label">v2.4.0</div>
+  <div id="version-label">v2.5.0</div>
 </div>
 
 <div id="mobile-controls">
@@ -290,6 +290,9 @@ let frameCount = 0;
 const BATTLE_TIME_LIMIT = 60; // seconds
 let battleStartTime = 0; // Date.now() when battle actually starts
 let battleTimeUp = false; // true if match ended by timeout
+const WAITING_TIMEOUT = 180; // 3 minutes waiting timeout (seconds)
+let waitingStartTime = 0;
+let waitingTimerInterval = null;
 
 // ===== DOUBLE-TAP ZOOM PREVENTION (iOS Safari) =====
 // touch-action: none alone is insufficient on iOS Safari 14+
@@ -397,6 +400,8 @@ function connectWS() {
     connStatus.textContent = '切断';
     connStatus.style.background = 'rgba(200,0,0,0.5)';
     joinBtn.disabled = true;
+    clearWaitingTimer();
+    statusMsg.style.color = '';
     if (gameState === STATE.BATTLE) {
       // Connection lost during battle
       gameState = STATE.WIN;
@@ -413,13 +418,54 @@ function connectWS() {
   };
 }
 
+function clearWaitingTimer() {
+  if (waitingTimerInterval) {
+    clearInterval(waitingTimerInterval);
+    waitingTimerInterval = null;
+  }
+  waitingStartTime = 0;
+}
+
+function startWaitingCountdown(room) {
+  clearWaitingTimer();
+  waitingStartTime = Date.now();
+  const updateWaitingDisplay = () => {
+    const elapsed = Math.floor((Date.now() - waitingStartTime) / 1000);
+    const remaining = WAITING_TIMEOUT - elapsed;
+    if (remaining <= 0) {
+      // Timeout — release room and return to lobby
+      clearWaitingTimer();
+      if (ws && ws.readyState === WebSocket.OPEN) {
+        ws.send(JSON.stringify({ action: 'cancel', room: roomCode }));
+      }
+      errorMsg.textContent = '待機がタイムアウトしました';
+      statusMsg.textContent = '';
+      joinBtn.disabled = roomInput.value.length !== 4 || !ws || ws.readyState !== WebSocket.OPEN;
+      return;
+    }
+    const min = Math.floor(remaining / 60);
+    const sec = remaining % 60;
+    const timeStr = `${min}:${String(sec).padStart(2, '0')}`;
+    statusMsg.textContent = `ルーム ${room} で相手を待っています... (${timeStr})`;
+    if (remaining <= 30) {
+      statusMsg.style.color = '#ff6b6b';
+    } else {
+      statusMsg.style.color = '';
+    }
+  };
+  updateWaitingDisplay();
+  waitingTimerInterval = setInterval(updateWaitingDisplay, 1000);
+}
+
 function handleServerMessage(msg) {
   switch (msg.type) {
     case 'waiting':
-      statusMsg.textContent = `ルーム ${msg.room} で相手を待っています...`;
+      startWaitingCountdown(msg.room);
       break;
 
     case 'start':
+      clearWaitingTimer();
+      statusMsg.style.color = '';
       myRole = msg.you;
       lobbyEl.classList.add('hidden');
       gameState = STATE.BATTLE;
@@ -463,6 +509,8 @@ function handleServerMessage(msg) {
       break;
 
     case 'error':
+      clearWaitingTimer();
+      statusMsg.style.color = '';
       errorMsg.textContent = msg.message || 'エラーが発生しました';
       statusMsg.textContent = '';
       joinBtn.disabled = roomInput.value.length !== 4;
@@ -1207,9 +1255,11 @@ canvas.addEventListener('touchstart', (e) => {
 canvas.addEventListener('touchmove', (e) => { e.preventDefault(); }, { passive: false });
 
 function returnToLobby() {
+  clearWaitingTimer();
   gameState = STATE.LOBBY;
   lobbyEl.classList.remove('hidden');
   statusMsg.textContent = '';
+  statusMsg.style.color = '';
   errorMsg.textContent = '';
   // Keep room code for easy rematch — pre-fill input with last room
   if (roomCode && roomCode.length === 4) {

@@ -249,6 +249,24 @@ exports.handler = async (event) => {
       }
       break;
     }
+
+    case 'cancel': {
+      // Client-initiated room cancellation (waiting timeout or manual cancel)
+      const roomCode = String(body.room || '');
+      if (!roomCode) break;
+      const room = (await ddb.send(new GetCommand({ TableName: TABLE, Key: { roomCode } }))).Item;
+      if (!room) break;
+
+      // Only allow cancellation of waiting rooms by the room creator
+      if (room.status !== 'waiting') break;
+      if (room.p1ConnectionId !== connectionId && room.p2ConnectionId !== connectionId) break;
+
+      await ddb.send(new DeleteCommand({
+        TableName: TABLE,
+        Key: { roomCode },
+      }));
+      break;
+    }
   }
 
   return { statusCode: 200, body: 'OK' };
