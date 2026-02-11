@@ -174,6 +174,16 @@ canvas {
 .atk-slide { background: rgba(244,166,35,0.4);   border-color: rgba(244,166,35,0.7); }
 .atk-flop  { background: rgba(217,74,74,0.4);    border-color: rgba(217,74,74,0.7); }
 
+/* Version label */
+#version-label {
+  position: fixed;
+  bottom: 8px;
+  right: 12px;
+  color: rgba(255,255,255,0.3);
+  font-size: 11px;
+  font-family: 'Courier New', monospace;
+}
+
 /* Connection status */
 #conn-status {
   position: fixed;
@@ -198,6 +208,7 @@ canvas {
   <button id="join-btn" disabled>ルームに参加</button>
   <div class="status-msg" id="status-msg"></div>
   <div class="error-msg" id="error-msg"></div>
+  <div id="version-label">v2.0.0</div>
 </div>
 
 <div id="mobile-controls">
@@ -349,25 +360,9 @@ function handleServerMessage(msg) {
       resetBattle();
       break;
 
-    case 'input':
-      // Apply opponent's input
-      remoteInput.left = !!msg.left;
-      remoteInput.right = !!msg.right;
-      remoteInput.up = !!msg.up;
-      // Only set atk if it's a new attack (>= 0), don't overwrite with -1
-      // because -1 just means "not pressing" and we already clear after apply
-      if (msg.atk >= 0) remoteInput.atk = msg.atk;
-      break;
-
-    case 'sync': {
-      // Opponent sent their authoritative position — correct our view of them
-      const rp = remotePenguin;
-      // Always snap velocity to authoritative value
-      rp.vx = msg.vx;
-      rp.vy = msg.vy;
-      // Position: snap directly (authoritative is truth)
-      rp.x = msg.x;
-      rp.y = msg.y;
+    case 'state': {
+      // Full authoritative state from opponent — apply directly
+      lastRemoteState = msg;
       break;
     }
 
@@ -398,9 +393,9 @@ function handleServerMessage(msg) {
 
 connectWS();
 
-// ===== REMOTE INPUT STATE =====
-// Remote input is consumed once per frame then attack is cleared
-const remoteInput = { left: false, right: false, up: false, atk: -1 };
+// ===== REMOTE STATE =====
+// Full state received from opponent, applied directly
+let lastRemoteState = null;
 
 // ===== PENGUIN CLASS =====
 class Penguin {
@@ -466,6 +461,47 @@ class Penguin {
         this.isAttacking = false;
       }
     }
+  }
+
+  // Remote penguin update: only timers and animation, no physics
+  // Position/velocity/attack state come from state sync
+  updateRemote(other) {
+    this.animTimer += 0.1;
+    if (this.invincible > 0) this.invincible--;
+    if (this.hitTimer > 0) this.hitTimer--;
+
+    // Between state syncs, simulate physics for smooth interpolation
+    this.vy += 0.6;
+    this.y += this.vy;
+    this.x += this.vx;
+
+    const ground = 400;
+    if (this.y >= ground) {
+      this.y = ground;
+      this.vy = 0;
+      this.grounded = true;
+    } else {
+      this.grounded = false;
+    }
+
+    if (this.slideTimer <= 0) {
+      this.vx *= 0.85;
+    } else {
+      this.vx *= 0.97;
+    }
+
+    if (this.x < 30) this.x = 30;
+    if (this.x > 770) this.x = 770;
+
+    // Attack timer ticks down locally for smooth animation
+    if (this.isAttacking) {
+      this.attackTimer--;
+      if (this.attackTimer <= 0) {
+        this.isAttacking = false;
+      }
+    }
+    if (this.attackCooldown > 0) this.attackCooldown--;
+    if (this.slideTimer > 0) this.slideTimer--;
   }
 
   attack(type) {
@@ -743,11 +779,14 @@ function updateDamageTexts() {
 }
 
 // ===== INPUT & NETWORK =====
-let lastSentInput = null;
-const SYNC_INTERVAL = 10; // send state sync every N frames (~6/sec)
+const STATE_SYNC_INTERVAL = 3; // send full state every N frames (~20/sec at 60fps)
 
 function handleLocalInput() {
-  if (localPenguin.hitTimer > 0) return;
+  if (localPenguin.hitTimer > 0) {
+    // Still send state even when hit-stunned so opponent sees knockback
+    sendStateToServer();
+    return;
+  }
 
   const inp = {
     left: !!(keys['ArrowLeft'] || keys['a'] || touchState.left),
@@ -766,58 +805,71 @@ function handleLocalInput() {
   if (inp.atk >= 0) localPenguin.attack(inp.atk);
   if (Math.abs(localPenguin.vx) > 5) localPenguin.vx = 5 * Math.sign(localPenguin.vx);
 
-  // Send input to server every frame (opponent needs it for smooth movement)
-  if (ws && ws.readyState === WebSocket.OPEN) {
-    const inputKey = `${inp.left}${inp.right}${inp.up}${inp.atk}`;
-    if (inputKey !== lastSentInput) {
-      ws.send(JSON.stringify({
-        action: 'input',
-        room: roomCode,
-        frame: frameCount,
-        left: inp.left ? 1 : 0,
-        right: inp.right ? 1 : 0,
-        up: inp.up ? 1 : 0,
-        atk: inp.atk,
-      }));
-      lastSentInput = inputKey;
-    }
-  }
-
-  // Periodic state sync: authoritative position correction
-  if (frameCount % SYNC_INTERVAL === 0 && ws && ws.readyState === WebSocket.OPEN) {
-    ws.send(JSON.stringify({
-      action: 'sync',
-      room: roomCode,
-      x: Math.round(localPenguin.x * 10) / 10,
-      y: Math.round(localPenguin.y * 10) / 10,
-      vx: Math.round(localPenguin.vx * 100) / 100,
-      vy: Math.round(localPenguin.vy * 100) / 100,
-    }));
-  }
+  // Send full state periodically
+  sendStateToServer();
 }
 
-let prevRemoteUp = false;
+function sendStateToServer() {
+  if (frameCount % STATE_SYNC_INTERVAL !== 0) return;
+  if (!ws || ws.readyState !== WebSocket.OPEN) return;
 
-function applyRemoteInput() {
-  if (remotePenguin.hitTimer > 0) {
-    prevRemoteUp = remoteInput.up;
-    return;
+  const lp = localPenguin;
+  ws.send(JSON.stringify({
+    action: 'state',
+    room: roomCode,
+    x: Math.round(lp.x * 10) / 10,
+    y: Math.round(lp.y * 10) / 10,
+    vx: Math.round(lp.vx * 100) / 100,
+    vy: Math.round(lp.vy * 100) / 100,
+    atk: lp.attackType,
+    atkT: lp.attackTimer,
+    isAtk: lp.isAttacking ? 1 : 0,
+    atkCd: lp.attackCooldown,
+    slideT: lp.slideTimer,
+    hp: Math.round(lp.hp * 10) / 10,
+    f: frameCount,
+    gr: lp.grounded ? 1 : 0,
+    face: lp.facing,
+  }));
+}
+
+function applyRemoteState() {
+  if (!lastRemoteState) return;
+  const msg = lastRemoteState;
+  const rp = remotePenguin;
+
+  // Position & velocity: snap to authoritative values
+  rp.x = msg.x;
+  rp.y = msg.y;
+  rp.vx = msg.vx;
+  rp.vy = msg.vy;
+
+  // Attack state: sync fully
+  if (msg.isAtk) {
+    // Opponent is attacking — sync their attack state
+    if (!rp.isAttacking || rp.attackType !== msg.atk) {
+      // New attack started or different attack type
+      rp.isAttacking = true;
+      rp.attackType = msg.atk;
+    }
+    rp.attackTimer = msg.atkT;
+  } else {
+    rp.isAttacking = false;
+    rp.attackTimer = 0;
   }
-  // Movement: continuous (applied every frame while held)
-  if (remoteInput.left) remotePenguin.vx -= 1.0;
-  if (remoteInput.right) remotePenguin.vx += 1.0;
+  rp.attackCooldown = msg.atkCd;
+  rp.slideTimer = msg.slideT;
+  rp.grounded = !!msg.gr;
+  rp.facing = msg.face;
 
-  // Jump: edge-triggered (only on rising edge of up)
-  if (remoteInput.up && !prevRemoteUp && remotePenguin.grounded) {
-    remotePenguin.vy = -12;
+  // HP sync (server-authoritative damage will override, but this keeps display in sync)
+  // Only sync if remote reports lower HP (don't override server damage)
+  if (msg.hp < rp.hp) {
+    rp.hp = msg.hp;
   }
-  prevRemoteUp = remoteInput.up;
 
-  // Attack: one-shot (cleared after applying)
-  if (remoteInput.atk >= 0) remotePenguin.attack(remoteInput.atk);
-  remoteInput.atk = -1;
-
-  if (Math.abs(remotePenguin.vx) > 5) remotePenguin.vx = 5 * Math.sign(remotePenguin.vx);
+  // Clear after applying
+  lastRemoteState = null;
 }
 
 // ===== ATTACK HIT DETECTION =====
@@ -883,9 +935,10 @@ function updateBattle() {
 
   frameCount++;
   handleLocalInput();
-  applyRemoteInput();
+  applyRemoteState();
   localPenguin.update(remotePenguin);
-  remotePenguin.update(localPenguin);
+  // Remote penguin: only run animation/timer updates, position comes from state sync
+  remotePenguin.updateRemote(localPenguin);
 
   checkAttacks(localPenguin, remotePenguin);
   checkAttacks(remotePenguin, localPenguin);
@@ -984,11 +1037,7 @@ function returnToLobby() {
   joinBtn.disabled = roomInput.value.length !== 4;
   roomCode = '';
   myRole = '';
-  lastSentInput = null;
-  remoteInput.left = false;
-  remoteInput.right = false;
-  remoteInput.up = false;
-  remoteInput.atk = -1;
+  lastRemoteState = null;
 }
 
 // ===== START =====

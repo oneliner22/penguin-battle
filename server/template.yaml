@@ -59,9 +59,7 @@ Resources:
       ApiId: !Ref PenguinBattleWS
       StageName: prod
       AutoDeploy: true
-      DefaultRouteSettings:
-        ThrottlingRateLimit: 50
-        ThrottlingBurstLimit: 100
+      DefaultRouteSettings: {}
 
   # Connect
   ConnectFunction:

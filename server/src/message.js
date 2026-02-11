@@ -143,9 +143,8 @@ exports.handler = async (event) => {
       break;
     }
 
-    case 'input':
-    case 'sync': {
-      // Relay input or sync to opponent
+    case 'state': {
+      // Full state relay — pass through entire state to opponent
       const roomCode = String(body.room || '');
       const room = (await ddb.send(new GetCommand({ TableName: TABLE, Key: { roomCode } }))).Item;
       if (!room || room.status !== 'playing') break;
@@ -155,25 +154,23 @@ exports.handler = async (event) => {
         : room.p1ConnectionId;
 
       if (opponentCid) {
-        if (body.action === 'input') {
-          await sendTo(api, opponentCid, {
-            type: 'input',
-            frame: body.frame,
-            left: body.left,
-            right: body.right,
-            up: body.up,
-            atk: body.atk,
-          });
-        } else {
-          // sync: relay position/velocity
-          await sendTo(api, opponentCid, {
-            type: 'sync',
-            x: body.x,
-            y: body.y,
-            vx: body.vx,
-            vy: body.vy,
-          });
-        }
+        // Relay full state: position, velocity, attack state, input
+        await sendTo(api, opponentCid, {
+          type: 'state',
+          x: body.x,
+          y: body.y,
+          vx: body.vx,
+          vy: body.vy,
+          atk: body.atk,       // attack type if attacking, -1 if not
+          atkT: body.atkT,     // attackTimer
+          isAtk: body.isAtk,   // isAttacking
+          atkCd: body.atkCd,   // attackCooldown
+          slideT: body.slideT, // slideTimer
+          hp: body.hp,
+          f: body.f,           // frame count
+          gr: body.gr,         // grounded
+          face: body.face,     // facing direction
+        });
       }
       break;
     }
