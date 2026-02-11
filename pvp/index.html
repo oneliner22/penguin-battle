@@ -362,22 +362,12 @@ function handleServerMessage(msg) {
     case 'sync': {
       // Opponent sent their authoritative position — correct our view of them
       const rp = remotePenguin;
-      const dx = msg.x - rp.x;
-      const dy = msg.y - rp.y;
-      // Smooth interpolation to avoid teleporting
-      if (Math.abs(dx) > 50 || Math.abs(dy) > 50) {
-        // Big desync: snap immediately
-        rp.x = msg.x;
-        rp.y = msg.y;
-        rp.vx = msg.vx;
-        rp.vy = msg.vy;
-      } else {
-        // Small desync: blend toward correct position
-        rp.x += dx * 0.3;
-        rp.y += dy * 0.3;
-        rp.vx = msg.vx;
-        rp.vy = msg.vy;
-      }
+      // Always snap velocity to authoritative value
+      rp.vx = msg.vx;
+      rp.vy = msg.vy;
+      // Position: snap directly (authoritative is truth)
+      rp.x = msg.x;
+      rp.y = msg.y;
       break;
     }
 
@@ -754,8 +744,7 @@ function updateDamageTexts() {
 
 // ===== INPUT & NETWORK =====
 let lastSentInput = null;
-const SYNC_INTERVAL = 6; // send state sync every N frames
-const INPUT_SEND_INTERVAL = 3; // send input every N frames even if unchanged
+const SYNC_INTERVAL = 10; // send state sync every N frames (~6/sec)
 
 function handleLocalInput() {
   if (localPenguin.hitTimer > 0) return;
@@ -777,25 +766,24 @@ function handleLocalInput() {
   if (inp.atk >= 0) localPenguin.attack(inp.atk);
   if (Math.abs(localPenguin.vx) > 5) localPenguin.vx = 5 * Math.sign(localPenguin.vx);
 
-  // Send input to server: on change OR periodically
-  const inputKey = `${inp.left}${inp.right}${inp.up}${inp.atk}`;
-  const changed = inputKey !== lastSentInput;
-  const periodic = frameCount % INPUT_SEND_INTERVAL === 0;
-
-  if ((changed || periodic) && ws && ws.readyState === WebSocket.OPEN) {
-    ws.send(JSON.stringify({
-      action: 'input',
-      room: roomCode,
-      frame: frameCount,
-      left: inp.left ? 1 : 0,
-      right: inp.right ? 1 : 0,
-      up: inp.up ? 1 : 0,
-      atk: inp.atk,
-    }));
-    lastSentInput = inputKey;
+  // Send input to server every frame (opponent needs it for smooth movement)
+  if (ws && ws.readyState === WebSocket.OPEN) {
+    const inputKey = `${inp.left}${inp.right}${inp.up}${inp.atk}`;
+    if (inputKey !== lastSentInput) {
+      ws.send(JSON.stringify({
+        action: 'input',
+        room: roomCode,
+        frame: frameCount,
+        left: inp.left ? 1 : 0,
+        right: inp.right ? 1 : 0,
+        up: inp.up ? 1 : 0,
+        atk: inp.atk,
+      }));
+      lastSentInput = inputKey;
+    }
   }
 
-  // Periodic state sync: send authoritative position of local penguin
+  // Periodic state sync: authoritative position correction
   if (frameCount % SYNC_INTERVAL === 0 && ws && ws.readyState === WebSocket.OPEN) {
     ws.send(JSON.stringify({
       action: 'sync',

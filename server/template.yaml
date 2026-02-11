@@ -60,8 +60,8 @@ Resources:
       StageName: prod
       AutoDeploy: true
       DefaultRouteSettings:
-        ThrottlingRateLimit: 5
-        ThrottlingBurstLimit: 10
+        ThrottlingRateLimit: 50
+        ThrottlingBurstLimit: 100
 
   # Connect
   ConnectFunction:
