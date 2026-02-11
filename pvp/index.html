@@ -238,6 +238,47 @@ canvas {
 .r-arrow { color: rgba(255,255,255,0.3); margin: 0 2px; }
 .r-desc { color: rgba(255,255,255,0.35); font-size: 11px; margin-left: 4px; }
 
+/* Keybind button & overlay */
+#keybind-btn {
+  position: fixed;
+  top: 8px;
+  left: 8px;
+  padding: 4px 10px;
+  border-radius: 8px;
+  font-size: 12px;
+  color: #aaccff;
+  background: rgba(0,0,0,0.5);
+  border: 1px solid rgba(74,144,217,0.4);
+  cursor: pointer;
+  z-index: 15;
+  display: none;
+}
+#keybind-overlay {
+  display: none;
+  position: fixed;
+  inset: 0;
+  background: rgba(0,0,0,0.85);
+  z-index: 100;
+  justify-content: center;
+  align-items: center;
+}
+#keybind-overlay.show { display: flex; }
+#keybind-box {
+  background: #1a2a4e;
+  border: 2px solid #4a90d9;
+  border-radius: 12px;
+  padding: 24px 32px;
+  color: #fff;
+  font-family: 'Segoe UI', sans-serif;
+  max-width: 340px;
+  width: 90%;
+}
+#keybind-box h3 { margin: 0 0 12px; color: #58a6ff; font-size: 16px; text-align: center; }
+.kb-row { display: flex; justify-content: space-between; padding: 4px 0; font-size: 14px; }
+.kb-row .kb-action { color: #8b949e; }
+.kb-row .kb-key { color: #fff; font-family: 'Courier New', monospace; }
+#keybind-box .kb-close { display: block; margin: 16px auto 0; padding: 6px 24px; border-radius: 8px; border: 1px solid #4a90d9; background: transparent; color: #58a6ff; cursor: pointer; font-size: 14px; }
+
 /* Version label */
 #version-label {
   position: fixed;
@@ -268,6 +309,7 @@ canvas {
 <div id="lobby">
   <h1>PENGUIN BATTLE!</h1>
   <div class="subtitle">- Online PvP -</div>
+  <div class="lobby-guide">PC / スマホ どちらでも対戦できます</div>
   <div class="lobby-guide">1人目:「ルーム作成」でコードを発行し相手に伝える<br>2人目: コードを入力して「参加」</div>
   <div class="lobby-btns">
     <button id="create-btn">ルーム作成</button>
@@ -284,6 +326,19 @@ canvas {
     <div class="rules-row"><span class="r-guard">GUARD</span> <span class="r-arrow">&gt;</span> <span class="r-strike">STRIKE</span> <span class="r-desc">防御+反撃</span></div>
   </div>
   <div id="version-label">v2.6.0</div>
+</div>
+
+<button id="keybind-btn">Keys</button>
+<div id="keybind-overlay">
+  <div id="keybind-box">
+    <h3>PC Keybinds</h3>
+    <div class="kb-row"><span class="kb-action">Move</span><span class="kb-key">&larr; &rarr; / A D</span></div>
+    <div class="kb-row"><span class="kb-action">Jump</span><span class="kb-key">&uarr; / W</span></div>
+    <div class="kb-row"><span class="kb-action">SLAP</span><span class="kb-key">Z / J</span></div>
+    <div class="kb-row"><span class="kb-action">STRIKE</span><span class="kb-key">X / K</span></div>
+    <div class="kb-row"><span class="kb-action">GUARD</span><span class="kb-key">C / L</span></div>
+    <button class="kb-close" id="keybind-close">OK</button>
+  </div>
 </div>
 
 <div id="mobile-controls">
@@ -316,6 +371,9 @@ const errorMsg = document.getElementById('error-msg');
 const connStatus = document.getElementById('conn-status');
 const createBtn = document.getElementById('create-btn');
 const copyBtn = document.getElementById('copy-btn');
+const keybindBtn = document.getElementById('keybind-btn');
+const keybindOverlay = document.getElementById('keybind-overlay');
+const keybindClose = document.getElementById('keybind-close');
 
 // ===== GAME STATE =====
 const STATE = { LOBBY: -1, BATTLE: 1, WIN: 2, LOSE: 3, DRAW: 4 };
@@ -549,6 +607,7 @@ function handleServerMessage(msg) {
       statusMsg.style.color = '';
       myRole = msg.you;
       copyBtn.style.display = 'none';
+      keybindBtn.style.display = 'block';
       lobbyEl.classList.add('hidden');
       gameState = STATE.BATTLE;
       resetBattle();
@@ -1342,6 +1401,8 @@ function returnToLobby() {
   gameState = STATE.LOBBY;
   lobbyEl.classList.remove('hidden');
   copyBtn.style.display = 'none';
+  keybindBtn.style.display = 'none';
+  keybindOverlay.classList.remove('show');
   statusMsg.textContent = '';
   statusMsg.style.color = '';
   errorMsg.textContent = '';
@@ -1355,6 +1416,11 @@ function returnToLobby() {
   myRole = '';
   lastRemoteState = null;
 }
+
+// ===== KEYBIND OVERLAY =====
+keybindBtn.addEventListener('click', () => { keybindOverlay.classList.add('show'); });
+keybindClose.addEventListener('click', () => { keybindOverlay.classList.remove('show'); });
+keybindOverlay.addEventListener('click', (e) => { if (e.target === keybindOverlay) keybindOverlay.classList.remove('show'); });
 
 // ===== BACK NAVIGATION GUARD =====
 // Prevent accidental browser-back during battle
