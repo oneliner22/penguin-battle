@@ -76,7 +76,20 @@ exports.handler = async (event) => {
 
       if (existing.Item) {
         const room = existing.Item;
-        if (room.status === 'waiting' && !room.p2ConnectionId) {
+        if (room.status === 'waiting' && (!room.p1ConnectionId || room.p1ConnectionId === '')) {
+          // Room exists but empty (after rematch reset) — join as p1
+          await ddb.send(new UpdateCommand({
+            TableName: TABLE,
+            Key: { roomCode },
+            UpdateExpression: 'SET p1ConnectionId = :cid, #t = :ttl',
+            ExpressionAttributeNames: { '#t': 'ttl' },
+            ExpressionAttributeValues: {
+              ':cid': connectionId,
+              ':ttl': Math.floor(Date.now() / 1000) + 300,
+            },
+          }));
+          await sendTo(api, connectionId, { type: 'waiting', room: roomCode });
+        } else if (room.status === 'waiting' && (!room.p2ConnectionId || room.p2ConnectionId === '')) {
           // Join as player 2
           const seed = Math.floor(Math.random() * 2147483647);
           await ddb.send(new UpdateCommand({
@@ -84,13 +97,7 @@ exports.handler = async (event) => {
             Key: { roomCode },
             UpdateExpression: 'SET p2ConnectionId = :cid, #s = :playing, seed = :seed, hitCount = :zero',
             ExpressionAttributeNames: { '#s': 'status' },
-            ExpressionAttributeValues: {
-              ':cid': connectionId,
-              ':playing': 'playing',
-              ':seed': seed,
-              ':zero': 0,
-            },
-            ConditionExpression: 'attribute_not_exists(p2ConnectionId) OR p2ConnectionId = :empty',
+            ConditionExpression: 'p2ConnectionId = :empty OR attribute_not_exists(p2ConnectionId)',
             ExpressionAttributeValues: {
               ':cid': connectionId,
               ':playing': 'playing',
@@ -204,18 +211,31 @@ exports.handler = async (event) => {
     }
 
     case 'end': {
-      // Game over, clean up
+      // Game over — reset room for rematch instead of deleting
       const roomCode = String(body.room || '');
       const room = (await ddb.send(new GetCommand({ TableName: TABLE, Key: { roomCode } }))).Item;
       if (!room) break;
 
       const winner = body.winner || 'unknown';
       const endMsg = { type: 'end', winner };
+      if (body.timeup) endMsg.timeup = true;
 
       if (room.p1ConnectionId) await sendTo(api, room.p1ConnectionId, endMsg);
       if (room.p2ConnectionId) await sendTo(api, room.p2ConnectionId, endMsg);
 
-      await ddb.send(new DeleteCommand({ TableName: TABLE, Key: { roomCode } }));
+      // Reset room to waiting with no players, extend TTL for rematch
+      await ddb.send(new UpdateCommand({
+        TableName: TABLE,
+        Key: { roomCode },
+        UpdateExpression: 'SET #s = :waiting, p1ConnectionId = :empty, p2ConnectionId = :empty, seed = :zero, hitCount = :zero, #t = :ttl',
+        ExpressionAttributeNames: { '#s': 'status', '#t': 'ttl' },
+        ExpressionAttributeValues: {
+          ':waiting': 'waiting',
+          ':empty': '',
+          ':zero': 0,
+          ':ttl': Math.floor(Date.now() / 1000) + 300,
+        },
+      }));
       break;
     }
   }

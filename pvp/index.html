@@ -246,7 +246,7 @@ canvas {
     <div class="rules-row"><span class="r-strike">STRIKE</span> <span class="r-arrow">&gt;</span> <span class="r-slap">SLAP</span> <span class="r-desc">高ダメージ</span></div>
     <div class="rules-row"><span class="r-guard">GUARD</span> <span class="r-arrow">&gt;</span> <span class="r-strike">STRIKE</span> <span class="r-desc">防御+反撃</span></div>
   </div>
-  <div id="version-label">v2.2.0</div>
+  <div id="version-label">v2.3.0</div>
 </div>
 
 <div id="mobile-controls">
@@ -279,7 +279,7 @@ const errorMsg = document.getElementById('error-msg');
 const connStatus = document.getElementById('conn-status');
 
 // ===== GAME STATE =====
-const STATE = { LOBBY: -1, BATTLE: 1, WIN: 2, LOSE: 3 };
+const STATE = { LOBBY: -1, BATTLE: 1, WIN: 2, LOSE: 3, DRAW: 4 };
 let gameState = STATE.LOBBY;
 let shakeTimer = 0, shakeIntensity = 0;
 let particles = [], damageTexts = [];
@@ -287,6 +287,9 @@ let battleStartTimer = 0;
 let myRole = ''; // 'p1' or 'p2'
 let roomCode = '';
 let frameCount = 0;
+const BATTLE_TIME_LIMIT = 60; // seconds
+let battleStartTime = 0; // Date.now() when battle actually starts
+let battleTimeUp = false; // true if match ended by timeout
 
 // ===== DOUBLE-TAP ZOOM PREVENTION (iOS Safari) =====
 // touch-action: none alone is insufficient on iOS Safari 14+
@@ -310,7 +313,12 @@ document.addEventListener('gesturestart', (e) => { e.preventDefault(); }, { pass
 
 // ===== KEYS & TOUCH =====
 const keys = {};
-window.addEventListener('keydown', e => { keys[e.key] = true; e.preventDefault(); });
+window.addEventListener('keydown', e => {
+  keys[e.key] = true;
+  // Don't prevent default for input fields (allows backspace, delete, etc.)
+  if (document.activeElement && document.activeElement.tagName === 'INPUT') return;
+  e.preventDefault();
+});
 window.addEventListener('keyup', e => { keys[e.key] = false; });
 
 const touchState = { left: false, right: false, up: false, atk: -1 };
@@ -440,7 +448,12 @@ function handleServerMessage(msg) {
     }
 
     case 'end':
-      gameState = msg.winner === myRole ? STATE.WIN : STATE.LOSE;
+      if (msg.winner === 'draw') {
+        gameState = STATE.DRAW;
+      } else {
+        gameState = msg.winner === myRole ? STATE.WIN : STATE.LOSE;
+      }
+      if (msg.timeup) battleTimeUp = true;
       break;
 
     case 'opponent_disconnected':
@@ -574,8 +587,7 @@ class Penguin {
     if (this.attackCooldown > 0 || this.isAttacking) return;
     this.isAttacking = true;
     this.attackType = type;
-    // Clear hit registration for new attack
-    if (typeof hitRegistered !== 'undefined') hitRegistered.delete(this);
+    this._hitSent = false; // Clear hit flag for new attack
     switch (type) {
       case 0: // SLAP — fast, low damage, pierces GUARD
         this.attackTimer = 10;
@@ -765,6 +777,8 @@ function resetBattle() {
   damageTexts = [];
   battleStartTimer = 90;
   frameCount = 0;
+  battleStartTime = 0; // Will be set when countdown ends
+  battleTimeUp = false;
 }
 
 // Initial penguins for pre-lobby rendering
@@ -947,43 +961,50 @@ function applyRemoteState() {
 }
 
 // ===== ATTACK HIT DETECTION =====
-// Track which attacks have already registered a hit to prevent multi-hit
-const hitRegistered = new WeakMap();
+// Track whether current attack has already hit (per penguin)
+// Using a simple flag on the penguin object instead of WeakMap
 
 function checkAttacks(attacker, defender) {
+  // Only local player reports hits
+  if (!attacker.isLocal) return;
+  if (!attacker.isAttacking) return;
+
   const atkBox = attacker.getAttackBox();
   if (!atkBox) return; // GUARD returns null — no offensive hitbox
 
-  // Hit detection window: SLAP frames 4-8, STRIKE frames 12-18 (5-7 frame window)
-  const minFrame = attacker.attackType === 1 ? 12 : 4;
-  const maxFrame = attacker.attackType === 1 ? 18 : 8;
+  // Already hit this attack cycle
+  if (attacker._hitSent) return;
+
+  // Hit detection window: nearly the entire attack animation
+  // SLAP (timer 10→0): active frames timer 2-9 (8 frame window)
+  // STRIKE (timer 22→0): active frames timer 4-20 (17 frame window)
+  const minFrame = attacker.attackType === 1 ? 4 : 2;
+  const maxFrame = attacker.attackType === 1 ? 20 : 9;
   if (attacker.attackTimer < minFrame || attacker.attackTimer > maxFrame) {
     return;
   }
 
-  // Only register one hit per attack
-  const attackKey = attacker;
-  if (hitRegistered.get(attackKey)) return;
+  // Simple distance-based hit check (more generous than box overlap)
+  const dx = Math.abs(attacker.x + attacker.facing * 15 - defender.x);
+  const dy = Math.abs(attacker.y - defender.y);
+  const hitRange = attacker.attackType === 1 ? 70 : 55; // STRIKE has longer reach due to slide
+  const hitRangeY = 50;
 
-  const hit = Math.abs(atkBox.x - defender.x) < atkBox.w &&
-              Math.abs(atkBox.y - (defender.y - 20)) < atkBox.h + 20;
+  if (dx < hitRange && dy < hitRangeY) {
+    attacker._hitSent = true;
 
-  if (hit && attacker.isLocal && ws && ws.readyState === WebSocket.OPEN) {
-    hitRegistered.set(attackKey, true);
+    if (ws && ws.readyState === WebSocket.OPEN) {
+      // Check rock-paper-scissors interaction
+      const isCountered = attacker.attackType === 1 && // STRIKE
+                          defender.isAttacking && defender.attackType === 2; // vs GUARD
 
-    // Check rock-paper-scissors interaction
-    const isCountered = attacker.attackType === 1 && // STRIKE
-                        defender.isAttacking && defender.attackType === 2; // vs GUARD
-
-    // SLAP (type 0) pierces GUARD — always hits, no counter check needed
-    // STRIKE (type 1) vs GUARD (type 2) — countered, attacker takes damage
-
-    ws.send(JSON.stringify({
-      action: 'hit',
-      room: roomCode,
-      attackType: attacker.attackType,
-      countered: isCountered ? 1 : 0,
-    }));
+      ws.send(JSON.stringify({
+        action: 'hit',
+        room: roomCode,
+        attackType: attacker.attackType,
+        countered: isCountered ? 1 : 0,
+      }));
+    }
   }
 }
 
@@ -1003,7 +1024,7 @@ function gameLoop() {
     // Just draw background, lobby overlay handles UI
   } else if (gameState === STATE.BATTLE) {
     updateBattle();
-  } else if (gameState === STATE.WIN || gameState === STATE.LOSE) {
+  } else if (gameState === STATE.WIN || gameState === STATE.LOSE || gameState === STATE.DRAW) {
     drawResult();
   }
 
@@ -1014,6 +1035,9 @@ function gameLoop() {
 function updateBattle() {
   if (battleStartTimer > 0) {
     battleStartTimer--;
+    if (battleStartTimer === 0) {
+      battleStartTime = Date.now(); // Start the clock when countdown ends
+    }
     localPenguin.draw();
     remotePenguin.draw();
     drawHPBar(30, 25, 250, 22, localPenguin.hp, localPenguin.maxHp, '#4a90d9', 'YOU');
@@ -1029,10 +1053,15 @@ function updateBattle() {
   }
 
   frameCount++;
+
+  // Calculate remaining time (real-time based, FPS-independent)
+  const elapsed = (Date.now() - battleStartTime) / 1000;
+  const remaining = Math.max(0, BATTLE_TIME_LIMIT - elapsed);
+  const remainSec = Math.ceil(remaining);
+
   handleLocalInput();
   applyRemoteState();
   localPenguin.update(remotePenguin);
-  // Remote penguin: only run animation/timer updates, position comes from state sync
   remotePenguin.updateRemote(localPenguin);
 
   checkAttacks(localPenguin, remotePenguin);
@@ -1046,7 +1075,38 @@ function updateBattle() {
   drawHPBar(30, 25, 250, 22, localPenguin.hp, localPenguin.maxHp, '#4a90d9', 'YOU');
   drawHPBar(520, 25, 250, 22, remotePenguin.hp, remotePenguin.maxHp, '#d94a4a', 'RIVAL');
 
-  // Win/lose check
+  // Draw timer
+  drawTimer(remainSec);
+
+  // Time up check
+  if (remaining <= 0) {
+    battleTimeUp = true;
+    const myHp = localPenguin.hp;
+    const theirHp = remotePenguin.hp;
+    const opponentRole = myRole === 'p1' ? 'p2' : 'p1';
+
+    if (myHp > theirHp) {
+      gameState = STATE.WIN;
+      spawnConfetti();
+      if (ws && ws.readyState === WebSocket.OPEN) {
+        ws.send(JSON.stringify({ action: 'end', room: roomCode, winner: myRole, timeup: 1 }));
+      }
+    } else if (theirHp > myHp) {
+      gameState = STATE.LOSE;
+      if (ws && ws.readyState === WebSocket.OPEN) {
+        ws.send(JSON.stringify({ action: 'end', room: roomCode, winner: opponentRole, timeup: 1 }));
+      }
+    } else {
+      // Exact tie
+      gameState = STATE.DRAW;
+      if (ws && ws.readyState === WebSocket.OPEN) {
+        ws.send(JSON.stringify({ action: 'end', room: roomCode, winner: 'draw', timeup: 1 }));
+      }
+    }
+    return;
+  }
+
+  // Win/lose check (KO)
   if (remotePenguin.hp <= 0) {
     gameState = STATE.WIN;
     spawnConfetti();
@@ -1061,6 +1121,20 @@ function updateBattle() {
       ws.send(JSON.stringify({ action: 'end', room: roomCode, winner: opponentRole }));
     }
   }
+}
+
+function drawTimer(remainSec) {
+  ctx.save();
+  ctx.font = 'bold 28px sans-serif';
+  ctx.textAlign = 'center';
+  // Flash red when under 10 seconds
+  if (remainSec <= 10) {
+    ctx.fillStyle = Math.sin(Date.now() * 0.01) > 0 ? '#ff4444' : '#ff8888';
+  } else {
+    ctx.fillStyle = '#fff';
+  }
+  ctx.fillText(remainSec, 400, 25);
+  ctx.restore();
 }
 
 function spawnConfetti() {
@@ -1086,21 +1160,34 @@ function drawResult() {
   drawHPBar(520, 25, 250, 22, remotePenguin.hp, remotePenguin.maxHp, '#d94a4a', 'RIVAL');
 
   ctx.fillStyle = 'rgba(0, 0, 0, 0.5)';
-  ctx.fillRect(0, 150, 800, 200);
+  ctx.fillRect(0, 130, 800, 230);
+
+  ctx.textAlign = 'center';
+
+  // Show TIME UP! if the match ended by timeout
+  if (battleTimeUp) {
+    ctx.font = 'bold 24px sans-serif';
+    ctx.fillStyle = '#ffaa44';
+    ctx.fillText('TIME UP!', 400, 175);
+  }
 
   ctx.font = 'bold 50px sans-serif';
-  ctx.textAlign = 'center';
 
   if (gameState === STATE.WIN) {
     ctx.fillStyle = '#4ecdc4';
-    ctx.fillText('YOU WIN!', 400, 240);
+    ctx.fillText('YOU WIN!', 400, 230);
     ctx.font = '20px sans-serif'; ctx.fillStyle = '#fff';
-    ctx.fillText('Your penguin is victorious!', 400, 280);
-  } else {
+    ctx.fillText('Your penguin is victorious!', 400, 270);
+  } else if (gameState === STATE.LOSE) {
     ctx.fillStyle = '#ff6b6b';
-    ctx.fillText('YOU LOSE...', 400, 240);
+    ctx.fillText('YOU LOSE...', 400, 230);
     ctx.font = '20px sans-serif'; ctx.fillStyle = '#fff';
-    ctx.fillText('Better luck next time...', 400, 280);
+    ctx.fillText('Better luck next time...', 400, 270);
+  } else if (gameState === STATE.DRAW) {
+    ctx.fillStyle = '#ffdd44';
+    ctx.fillText('DRAW', 400, 230);
+    ctx.font = '20px sans-serif'; ctx.fillStyle = '#fff';
+    ctx.fillText('Both penguins survived!', 400, 270);
   }
 
   ctx.font = 'bold 18px sans-serif';
@@ -1119,7 +1206,7 @@ function drawResult() {
 // Always prevent default on canvas touch (prevents iOS double-tap zoom)
 canvas.addEventListener('touchstart', (e) => {
   e.preventDefault();
-  if (gameState === STATE.WIN || gameState === STATE.LOSE) {
+  if (gameState === STATE.WIN || gameState === STATE.LOSE || gameState === STATE.DRAW) {
     returnToLobby();
   }
 }, { passive: false });
@@ -1130,7 +1217,11 @@ function returnToLobby() {
   lobbyEl.classList.remove('hidden');
   statusMsg.textContent = '';
   errorMsg.textContent = '';
-  joinBtn.disabled = roomInput.value.length !== 4;
+  // Keep room code for easy rematch — pre-fill input with last room
+  if (roomCode && roomCode.length === 4) {
+    roomInput.value = roomCode;
+  }
+  joinBtn.disabled = roomInput.value.length !== 4 || !ws || ws.readyState !== WebSocket.OPEN;
   roomCode = '';
   myRole = '';
   lastRemoteState = null;
