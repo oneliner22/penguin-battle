@@ -104,13 +104,12 @@ canvas {
   cursor: not-allowed;
 }
 #copy-btn {
-  width: 44px;
-  padding: 10px;
-  font-size: 20px;
+  padding: 8px 14px;
+  font-size: 14px;
   border-radius: 8px;
   border: 2px solid #4a90d9;
   background: #1a2a4e;
-  color: #fff;
+  color: #aaccff;
   cursor: pointer;
   vertical-align: middle;
 }
@@ -273,7 +272,7 @@ canvas {
     <button id="create-btn">ルーム作成</button>
   </div>
   <input id="room-input" type="text" maxlength="6" autocapitalize="characters" style="text-transform:uppercase" placeholder="コード入力">
-  <button id="copy-btn" style="display:none" title="コピー">&#x1F4CB;</button>
+  <button id="copy-btn" style="display:none" title="コピー">コードをコピー</button>
   <button id="join-btn" disabled>参加</button>
   <div class="status-msg" id="status-msg"></div>
   <div class="error-msg" id="error-msg"></div>
@@ -329,7 +328,7 @@ let frameCount = 0;
 const BATTLE_TIME_LIMIT = 60; // seconds
 let battleStartTime = 0; // Date.now() when battle actually starts
 let battleTimeUp = false; // true if match ended by timeout
-const WAITING_TIMEOUT = 180; // 3 minutes waiting timeout (seconds)
+const WAITING_TIMEOUT = 300; // 5 minutes waiting timeout (seconds)
 let waitingStartTime = 0;
 let waitingTimerInterval = null;
 
@@ -436,8 +435,8 @@ createBtn.addEventListener('click', () => {
 
 copyBtn.addEventListener('click', () => {
   navigator.clipboard.writeText(roomInput.value).then(() => {
-    copyBtn.textContent = '\u2713';
-    setTimeout(() => { copyBtn.textContent = '\u{1F4CB}'; }, 1500);
+    copyBtn.textContent = 'コピーしました!';
+    setTimeout(() => { copyBtn.textContent = 'コードをコピー'; }, 1500);
   });
 });
 
