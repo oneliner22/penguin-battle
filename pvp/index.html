@@ -103,6 +103,17 @@ canvas {
   color: #667;
   cursor: not-allowed;
 }
+#copy-btn {
+  width: 44px;
+  padding: 10px;
+  font-size: 20px;
+  border-radius: 8px;
+  border: 2px solid #4a90d9;
+  background: #1a2a4e;
+  color: #fff;
+  cursor: pointer;
+  vertical-align: middle;
+}
 .lobby-btns {
   display: flex;
   gap: 10px;
@@ -262,6 +273,7 @@ canvas {
     <button id="create-btn">ルーム作成</button>
   </div>
   <input id="room-input" type="text" maxlength="6" autocapitalize="characters" style="text-transform:uppercase" placeholder="コード入力">
+  <button id="copy-btn" style="display:none" title="コピー">&#x1F4CB;</button>
   <button id="join-btn" disabled>参加</button>
   <div class="status-msg" id="status-msg"></div>
   <div class="error-msg" id="error-msg"></div>
@@ -303,6 +315,7 @@ const statusMsg = document.getElementById('status-msg');
 const errorMsg = document.getElementById('error-msg');
 const connStatus = document.getElementById('conn-status');
 const createBtn = document.getElementById('create-btn');
+const copyBtn = document.getElementById('copy-btn');
 
 // ===== GAME STATE =====
 const STATE = { LOBBY: -1, BATTLE: 1, WIN: 2, LOSE: 3, DRAW: 4 };
@@ -416,8 +429,16 @@ createBtn.addEventListener('click', () => {
   ws.send(JSON.stringify({ action: 'join', room: roomCode }));
   joinBtn.disabled = true;
   createBtn.disabled = true;
+  copyBtn.style.display = 'inline-block';
   statusMsg.textContent = '接続中...';
   errorMsg.textContent = '';
+});
+
+copyBtn.addEventListener('click', () => {
+  navigator.clipboard.writeText(roomInput.value).then(() => {
+    copyBtn.textContent = '\u2713';
+    setTimeout(() => { copyBtn.textContent = '\u{1F4CB}'; }, 1500);
+  });
 });
 
 joinBtn.addEventListener('click', () => {
@@ -527,6 +548,7 @@ function handleServerMessage(msg) {
       clearWaitingTimer();
       statusMsg.style.color = '';
       myRole = msg.you;
+      copyBtn.style.display = 'none';
       lobbyEl.classList.add('hidden');
       gameState = STATE.BATTLE;
       resetBattle();
@@ -1319,6 +1341,7 @@ function returnToLobby() {
   clearWaitingTimer();
   gameState = STATE.LOBBY;
   lobbyEl.classList.remove('hidden');
+  copyBtn.style.display = 'none';
   statusMsg.textContent = '';
   statusMsg.style.color = '';
   errorMsg.textContent = '';

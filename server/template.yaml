@@ -354,13 +354,6 @@ Resources:
     Properties:
       Name: PenguinBattleDashboard
       ProtocolType: HTTP
-      CorsConfiguration:
-        AllowOrigins:
-          - "*"
-        AllowMethods:
-          - GET
-        AllowHeaders:
-          - "*"
 
   DashboardAPIStage:
     Type: AWS::ApiGatewayV2::Stage

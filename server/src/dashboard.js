@@ -18,7 +18,14 @@ function getClientIp(event) {
 }
 
 function json(statusCode, body) {
-  return { statusCode, headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) };
+  return {
+    statusCode,
+    headers: {
+      'Content-Type': 'application/json',
+      'Access-Control-Allow-Origin': '*',
+    },
+    body: JSON.stringify(body),
+  };
 }
 
 function dateStr(daysAgo = 0) {
