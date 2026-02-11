@@ -390,7 +390,18 @@ function generateRoomCode() {
   return code;
 }
 
+let isComposing = false;
+roomInput.addEventListener('compositionstart', () => { isComposing = true; });
+roomInput.addEventListener('compositionend', () => {
+  isComposing = false;
+  // Trigger cleanup after composition finishes
+  const v = roomInput.value.replace(/[^A-Za-z0-9]/g, '').toUpperCase().slice(0, 6);
+  roomInput.value = v;
+  joinBtn.disabled = v.length !== 6 || !ws || ws.readyState !== WebSocket.OPEN;
+  errorMsg.textContent = '';
+});
 roomInput.addEventListener('input', () => {
+  if (isComposing) return; // Skip during IME composition (iOS Japanese input)
   const v = roomInput.value.replace(/[^A-Za-z0-9]/g, '').toUpperCase().slice(0, 6);
   roomInput.value = v;
   joinBtn.disabled = v.length !== 6 || !ws || ws.readyState !== WebSocket.OPEN;
