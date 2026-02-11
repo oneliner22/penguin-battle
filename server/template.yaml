@@ -8,6 +8,14 @@ Parameters:
   CodeKey:
     Type: String
     Description: S3 key for Lambda code zip
+  WAFIPSetId:
+    Type: String
+    Description: WAF IP Set ID (from penguin-battle-waf stack)
+    Default: ''
+  WAFIPSetName:
+    Type: String
+    Description: WAF IP Set Name (from penguin-battle-waf stack)
+    Default: ''
 
 Resources:
   # IAM Role for Lambda functions
@@ -246,8 +254,77 @@ Resources:
       TimeToLiveSpecification:
         AttributeName: ttl
         Enabled: true
+      StreamSpecification:
+        StreamViewType: NEW_AND_OLD_IMAGES
+
+  # WAF Sync
+  WafSyncRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: PenguinBattleWafSyncRole
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: lambda.amazonaws.com
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole
+      Policies:
+        - PolicyName: WafSyncPolicy
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - wafv2:GetIPSet
+                  - wafv2:UpdateIPSet
+                Resource: !Sub "arn:aws:wafv2:us-east-1:${AWS::AccountId}:global/ipset/*"
+              - Effect: Allow
+                Action:
+                  - dynamodb:DescribeStream
+                  - dynamodb:GetRecords
+                  - dynamodb:GetShardIterator
+                  - dynamodb:ListStreams
+                Resource: !GetAtt ThrottleTable.StreamArn
+
+  WafSyncFunction:
+    Type: AWS::Lambda::Function
+    Properties:
+      FunctionName: PenguinBattle-WafSync
+      Runtime: nodejs20.x
+      Handler: src/waf-sync.handler
+      Timeout: 30
+      MemorySize: 128
+      ReservedConcurrentExecutions: 2
+      Role: !GetAtt WafSyncRole.Arn
+      Code:
+        S3Bucket: !Ref CodeBucket
+        S3Key: !Ref CodeKey
+      Environment:
+        Variables:
+          WAF_IP_SET_ID: !Ref WAFIPSetId
+          WAF_IP_SET_NAME: !Ref WAFIPSetName
+
+  WafSyncEventSourceMapping:
+    Type: AWS::Lambda::EventSourceMapping
+    Properties:
+      EventSourceArn: !GetAtt ThrottleTable.StreamArn
+      FunctionName: !GetAtt WafSyncFunction.Arn
+      StartingPosition: TRIM_HORIZON
+      BatchSize: 10
+      MaximumBatchingWindowInSeconds: 5
+      MaximumRetryAttempts: 2
+      BisectBatchOnFunctionError: true
+      FilterCriteria:
+        Filters:
+          - Pattern: '{"dynamodb":{"Keys":{"pk":{"S":[{"prefix":"ban#"}]}}}}'
 
 Outputs:
   WebSocketURL:
     Description: WebSocket API URL
     Value: !Sub "wss://${PenguinBattleWS}.execute-api.${AWS::Region}.amazonaws.com/prod"
+  ApiGatewayDomain:
+    Description: API Gateway domain for CloudFront origin
+    Value: !Sub "${PenguinBattleWS}.execute-api.${AWS::Region}.amazonaws.com"

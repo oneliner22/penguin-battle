@@ -8,9 +8,19 @@ const THROTTLE_TABLE = process.env.THROTTLE_TABLE;
 const CONN_RATE_LIMIT = 30;    // max connections per minute per IP
 const BAN_DURATION = 86400;     // 24 hours in seconds
 
+function getClientIp(event) {
+  // When behind CloudFront, real client IP is in X-Forwarded-For header
+  const xff = event.headers?.['X-Forwarded-For'] || event.headers?.['x-forwarded-for'];
+  if (xff) {
+    const firstIp = xff.split(',')[0].trim();
+    if (/^\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}$/.test(firstIp)) return firstIp;
+  }
+  return event.requestContext.identity?.sourceIp || 'unknown';
+}
+
 exports.handler = async (event) => {
   const connectionId = event.requestContext.connectionId;
-  const sourceIp = event.requestContext.identity?.sourceIp || 'unknown';
+  const sourceIp = getClientIp(event);
   console.log('Connect:', connectionId, 'IP:', sourceIp);
 
   if (!THROTTLE_TABLE || sourceIp === 'unknown') {

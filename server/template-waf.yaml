@@ -1,0 +1,102 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: Penguin Battle WAF + CloudFront (deploy to us-east-1)
+
+Parameters:
+  ApiGatewayDomain:
+    Type: String
+    Description: API Gateway WebSocket domain (e.g. xxx.execute-api.ap-northeast-1.amazonaws.com)
+
+Resources:
+  BannedIPSet:
+    Type: AWS::WAFv2::IPSet
+    Properties:
+      Name: PenguinBattleBannedIPs
+      Scope: CLOUDFRONT
+      IPAddressVersion: IPV4
+      Addresses: []
+
+  WebACL:
+    Type: AWS::WAFv2::WebACL
+    Properties:
+      Name: PenguinBattleWebACL
+      Scope: CLOUDFRONT
+      DefaultAction:
+        Allow: {}
+      Rules:
+        - Name: BlockBannedIPs
+          Priority: 0
+          Action:
+            Block: {}
+          Statement:
+            IPSetReferenceStatement:
+              Arn: !GetAtt BannedIPSet.Arn
+          VisibilityConfig:
+            SampledRequestsEnabled: true
+            CloudWatchMetricsEnabled: true
+            MetricName: BlockBannedIPs
+        - Name: RateLimit
+          Priority: 1
+          Action:
+            Block: {}
+          Statement:
+            RateBasedStatement:
+              Limit: 2000
+              AggregateKeyType: IP
+          VisibilityConfig:
+            SampledRequestsEnabled: true
+            CloudWatchMetricsEnabled: true
+            MetricName: RateLimit
+      VisibilityConfig:
+        SampledRequestsEnabled: true
+        CloudWatchMetricsEnabled: true
+        MetricName: PenguinBattleWebACL
+
+  CloudFrontDistribution:
+    Type: AWS::CloudFront::Distribution
+    Properties:
+      DistributionConfig:
+        Enabled: true
+        Comment: Penguin Battle WebSocket + WAF
+        WebACLId: !GetAtt WebACL.Arn
+        Origins:
+          - Id: WebSocketOrigin
+            DomainName: !Ref ApiGatewayDomain
+            OriginPath: /prod
+            CustomOriginConfig:
+              HTTPSPort: 443
+              OriginProtocolPolicy: https-only
+              OriginSSLProtocols:
+                - TLSv1.2
+        DefaultCacheBehavior:
+          TargetOriginId: WebSocketOrigin
+          ViewerProtocolPolicy: https-only
+          AllowedMethods:
+            - GET
+            - HEAD
+            - OPTIONS
+            - PUT
+            - POST
+            - PATCH
+            - DELETE
+          CachedMethods:
+            - GET
+            - HEAD
+          CachePolicyId: 4135ea2d-6df8-44a3-9df3-4b5a84be39ad
+          OriginRequestPolicyId: b689b0a8-53d0-40ab-baf2-68738e2966ac
+          Compress: false
+        PriceClass: PriceClass_200
+        HttpVersion: http2
+
+Outputs:
+  IPSetId:
+    Description: WAF IP Set ID
+    Value: !GetAtt BannedIPSet.Id
+  IPSetName:
+    Description: WAF IP Set Name
+    Value: PenguinBattleBannedIPs
+  CloudFrontDomain:
+    Description: CloudFront domain name
+    Value: !GetAtt CloudFrontDistribution.DomainName
+  CloudFrontWebSocketURL:
+    Description: WebSocket URL via CloudFront
+    Value: !Sub "wss://${CloudFrontDistribution.DomainName}"
