@@ -56,7 +56,7 @@ function flagGame(game) {
 exports.handler = async (event) => {
   // IP whitelist check
   const ip = getClientIp(event);
-  if (ADMIN_IPS.length > 0 && !ADMIN_IPS.includes(ip)) {
+  if (ADMIN_IPS.length === 0 || !ADMIN_IPS.includes(ip)) {
     console.log('Dashboard access denied:', ip);
     return json(403, { error: 'Forbidden' });
   }
