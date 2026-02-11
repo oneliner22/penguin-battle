@@ -1,0 +1,953 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+<title>Penguin Battle! PvP</title>
+<style>
+* { margin: 0; padding: 0; box-sizing: border-box; }
+body {
+  background: #1a1a2e;
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  flex-direction: column;
+  height: 100vh;
+  height: 100dvh;
+  font-family: 'Segoe UI', sans-serif;
+  overflow: hidden;
+  touch-action: none;
+  -webkit-touch-callout: none;
+  -webkit-user-select: none;
+  user-select: none;
+}
+canvas {
+  border: 3px solid #4a90d9;
+  border-radius: 8px;
+  box-shadow: 0 0 30px rgba(74, 144, 217, 0.3);
+}
+
+/* Lobby overlay */
+#lobby {
+  position: fixed;
+  top: 0; left: 0; right: 0; bottom: 0;
+  background: rgba(15, 27, 51, 0.95);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  z-index: 20;
+  gap: 16px;
+}
+#lobby.hidden { display: none; }
+#lobby h1 {
+  color: #fff;
+  font-size: 32px;
+  margin-bottom: 4px;
+}
+#lobby .subtitle {
+  color: #aaccff;
+  font-size: 16px;
+  margin-bottom: 20px;
+}
+#lobby input {
+  width: 160px;
+  padding: 14px;
+  font-size: 28px;
+  text-align: center;
+  border-radius: 12px;
+  border: 2px solid #4a90d9;
+  background: #1a2a4e;
+  color: #fff;
+  letter-spacing: 12px;
+  font-family: 'Courier New', monospace;
+  outline: none;
+}
+#lobby input::placeholder {
+  letter-spacing: 2px;
+  font-size: 16px;
+  color: #667;
+}
+#lobby button {
+  width: 200px;
+  padding: 14px;
+  font-size: 18px;
+  font-weight: bold;
+  border-radius: 12px;
+  border: none;
+  cursor: pointer;
+  touch-action: manipulation;
+}
+#join-btn {
+  background: #4a90d9;
+  color: #fff;
+}
+#join-btn:active { background: #3a70b0; }
+#join-btn:disabled {
+  background: #334;
+  color: #667;
+  cursor: not-allowed;
+}
+#lobby .status-msg {
+  color: #ffdd44;
+  font-size: 16px;
+  min-height: 24px;
+  text-align: center;
+  max-width: 300px;
+}
+#lobby .error-msg {
+  color: #ff6b6b;
+  font-size: 14px;
+  min-height: 20px;
+  text-align: center;
+  max-width: 300px;
+}
+
+/* Mobile controls */
+#mobile-controls {
+  display: flex;
+  position: fixed;
+  bottom: 0;
+  left: 0;
+  right: 0;
+  height: 160px;
+  justify-content: space-between;
+  align-items: flex-end;
+  padding: 0 10px 15px;
+  pointer-events: none;
+  z-index: 10;
+}
+.dpad {
+  pointer-events: auto;
+  position: relative;
+  width: 140px;
+  height: 140px;
+}
+.dpad-btn {
+  position: absolute;
+  width: 48px;
+  height: 48px;
+  background: rgba(255,255,255,0.15);
+  border: 2px solid rgba(255,255,255,0.3);
+  border-radius: 12px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 22px;
+  color: rgba(255,255,255,0.7);
+  touch-action: none;
+  -webkit-tap-highlight-color: transparent;
+}
+.dpad-btn.pressed {
+  background: rgba(255,255,255,0.35);
+  border-color: rgba(255,255,255,0.6);
+}
+.dpad-up    { left: 46px; top: 0; }
+.dpad-left  { left: 0;    top: 46px; }
+.dpad-right { left: 92px; top: 46px; }
+.attack-buttons {
+  pointer-events: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  align-items: flex-end;
+}
+.atk-btn {
+  width: 72px;
+  height: 44px;
+  border-radius: 12px;
+  border: 2px solid;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 12px;
+  font-weight: bold;
+  color: #fff;
+  touch-action: none;
+  -webkit-tap-highlight-color: transparent;
+}
+.atk-btn.pressed {
+  filter: brightness(1.4);
+  transform: scale(0.95);
+}
+.atk-slap  { background: rgba(74,144,217,0.4);  border-color: rgba(74,144,217,0.7); }
+.atk-slide { background: rgba(244,166,35,0.4);   border-color: rgba(244,166,35,0.7); }
+.atk-flop  { background: rgba(217,74,74,0.4);    border-color: rgba(217,74,74,0.7); }
+
+/* Connection status */
+#conn-status {
+  position: fixed;
+  top: 8px;
+  right: 8px;
+  padding: 4px 10px;
+  border-radius: 8px;
+  font-size: 12px;
+  color: #fff;
+  z-index: 15;
+  background: rgba(0,0,0,0.5);
+}
+</style>
+</head>
+<body>
+<canvas id="game" width="800" height="500"></canvas>
+
+<div id="lobby">
+  <h1>PENGUIN BATTLE!</h1>
+  <div class="subtitle">- Online PvP -</div>
+  <input id="room-input" type="tel" maxlength="4" placeholder="0000" inputmode="numeric">
+  <button id="join-btn" disabled>ルームに参加</button>
+  <div class="status-msg" id="status-msg"></div>
+  <div class="error-msg" id="error-msg"></div>
+</div>
+
+<div id="mobile-controls">
+  <div class="dpad">
+    <div class="dpad-btn dpad-up" data-dir="up">&#9650;</div>
+    <div class="dpad-btn dpad-left" data-dir="left">&#9664;</div>
+    <div class="dpad-btn dpad-right" data-dir="right">&#9654;</div>
+  </div>
+  <div class="attack-buttons">
+    <div class="atk-btn atk-slap" data-atk="0">SLAP</div>
+    <div class="atk-btn atk-slide" data-atk="1">SLIDE</div>
+    <div class="atk-btn atk-flop" data-atk="2">FLOP</div>
+  </div>
+</div>
+
+<div id="conn-status">接続中...</div>
+
+<script>
+// ===== CONFIG =====
+const WS_URL = 'wss://tmy8gwdci9.execute-api.ap-northeast-1.amazonaws.com/prod';
+
+// ===== DOM =====
+const canvas = document.getElementById('game');
+const ctx = canvas.getContext('2d');
+const lobbyEl = document.getElementById('lobby');
+const roomInput = document.getElementById('room-input');
+const joinBtn = document.getElementById('join-btn');
+const statusMsg = document.getElementById('status-msg');
+const errorMsg = document.getElementById('error-msg');
+const connStatus = document.getElementById('conn-status');
+
+// ===== GAME STATE =====
+const STATE = { LOBBY: -1, BATTLE: 1, WIN: 2, LOSE: 3 };
+let gameState = STATE.LOBBY;
+let shakeTimer = 0, shakeIntensity = 0;
+let particles = [], damageTexts = [];
+let battleStartTimer = 0;
+let myRole = ''; // 'p1' or 'p2'
+let roomCode = '';
+let frameCount = 0;
+
+// ===== KEYS & TOUCH =====
+const keys = {};
+window.addEventListener('keydown', e => { keys[e.key] = true; e.preventDefault(); });
+window.addEventListener('keyup', e => { keys[e.key] = false; });
+
+const touchState = { left: false, right: false, up: false, atk: -1 };
+
+// ===== CANVAS SCALING =====
+function resizeCanvas() {
+  const w = window.innerWidth;
+  const h = window.innerHeight;
+  const controlsH = 160;
+  const availH = h - controlsH;
+  const scale = Math.min(w / 800, availH / 500);
+  canvas.style.width = (800 * scale) + 'px';
+  canvas.style.height = (500 * scale) + 'px';
+}
+resizeCanvas();
+window.addEventListener('resize', resizeCanvas);
+
+// ===== TOUCH CONTROLS =====
+document.querySelectorAll('.dpad-btn').forEach(btn => {
+  const dir = btn.dataset.dir;
+  const onDown = (e) => { e.preventDefault(); touchState[dir] = true; btn.classList.add('pressed'); };
+  const onUp = (e) => { e.preventDefault(); touchState[dir] = false; btn.classList.remove('pressed'); };
+  btn.addEventListener('touchstart', onDown, { passive: false });
+  btn.addEventListener('touchend', onUp, { passive: false });
+  btn.addEventListener('touchcancel', onUp, { passive: false });
+});
+
+document.querySelectorAll('.atk-btn').forEach(btn => {
+  const atk = parseInt(btn.dataset.atk);
+  btn.addEventListener('touchstart', (e) => { e.preventDefault(); touchState.atk = atk; btn.classList.add('pressed'); }, { passive: false });
+  btn.addEventListener('touchend', (e) => { e.preventDefault(); touchState.atk = -1; btn.classList.remove('pressed'); }, { passive: false });
+  btn.addEventListener('touchcancel', (e) => { e.preventDefault(); touchState.atk = -1; btn.classList.remove('pressed'); }, { passive: false });
+});
+
+// ===== LOBBY UI =====
+roomInput.addEventListener('input', () => {
+  const v = roomInput.value.replace(/\D/g, '').slice(0, 4);
+  roomInput.value = v;
+  joinBtn.disabled = v.length !== 4 || !ws || ws.readyState !== WebSocket.OPEN;
+  errorMsg.textContent = '';
+});
+
+joinBtn.addEventListener('click', () => {
+  roomCode = roomInput.value;
+  if (roomCode.length === 4 && ws && ws.readyState === WebSocket.OPEN) {
+    ws.send(JSON.stringify({ action: 'join', room: roomCode }));
+    joinBtn.disabled = true;
+    statusMsg.textContent = '接続中...';
+    errorMsg.textContent = '';
+  }
+});
+
+// ===== WEBSOCKET =====
+let ws = null;
+let reconnectTimer = null;
+
+function connectWS() {
+  if (ws && ws.readyState <= 1) return;
+  connStatus.textContent = '接続中...';
+  connStatus.style.background = 'rgba(200,150,0,0.5)';
+
+  ws = new WebSocket(WS_URL);
+
+  ws.onopen = () => {
+    connStatus.textContent = '接続済み';
+    connStatus.style.background = 'rgba(0,150,0,0.5)';
+    joinBtn.disabled = roomInput.value.length !== 4;
+  };
+
+  ws.onmessage = (e) => {
+    const msg = JSON.parse(e.data);
+    handleServerMessage(msg);
+  };
+
+  ws.onclose = () => {
+    connStatus.textContent = '切断';
+    connStatus.style.background = 'rgba(200,0,0,0.5)';
+    joinBtn.disabled = true;
+    if (gameState === STATE.BATTLE) {
+      // Connection lost during battle
+      gameState = STATE.WIN;
+      statusMsg.textContent = '相手が切断しました';
+    }
+    // Auto-reconnect
+    clearTimeout(reconnectTimer);
+    reconnectTimer = setTimeout(connectWS, 2000);
+  };
+
+  ws.onerror = () => {
+    connStatus.textContent = 'エラー';
+    connStatus.style.background = 'rgba(200,0,0,0.5)';
+  };
+}
+
+function handleServerMessage(msg) {
+  switch (msg.type) {
+    case 'waiting':
+      statusMsg.textContent = `ルーム ${msg.room} で相手を待っています...`;
+      break;
+
+    case 'start':
+      myRole = msg.you;
+      lobbyEl.classList.add('hidden');
+      gameState = STATE.BATTLE;
+      resetBattle();
+      break;
+
+    case 'input':
+      // Apply opponent's input
+      remoteInput.left = !!msg.left;
+      remoteInput.right = !!msg.right;
+      remoteInput.up = !!msg.up;
+      remoteInput.atk = msg.atk != null ? msg.atk : -1;
+      break;
+
+    case 'damage': {
+      const target = msg.target === myRole ? myPenguin() : opponentPenguin();
+      const attacker = msg.target === myRole ? opponentPenguin() : myPenguin();
+      target.takeDamage(msg.dmg, attacker.x);
+      break;
+    }
+
+    case 'end':
+      gameState = msg.winner === myRole ? STATE.WIN : STATE.LOSE;
+      break;
+
+    case 'opponent_disconnected':
+      if (gameState === STATE.BATTLE) {
+        gameState = STATE.WIN;
+      }
+      break;
+
+    case 'error':
+      errorMsg.textContent = msg.message || 'エラーが発生しました';
+      statusMsg.textContent = '';
+      joinBtn.disabled = roomInput.value.length !== 4;
+      break;
+  }
+}
+
+connectWS();
+
+// ===== REMOTE INPUT STATE =====
+const remoteInput = { left: false, right: false, up: false, atk: -1 };
+
+// ===== PENGUIN CLASS =====
+class Penguin {
+  constructor(x, y, isLocal) {
+    this.x = x;
+    this.y = y;
+    this.baseY = y;
+    this.vx = 0;
+    this.vy = 0;
+    this.width = 40;
+    this.height = 50;
+    this.isLocal = isLocal;
+    this.facing = isLocal ? 1 : -1;
+    this.hp = 100;
+    this.maxHp = 100;
+    this.attackTimer = 0;
+    this.attackCooldown = 0;
+    this.isAttacking = false;
+    this.attackType = 0;
+    this.hitTimer = 0;
+    this.grounded = false;
+    this.animTimer = 0;
+    this.slideTimer = 0;
+    this.invincible = 0;
+  }
+
+  update(other) {
+    this.animTimer += 0.1;
+    if (this.attackCooldown > 0) this.attackCooldown--;
+    if (this.invincible > 0) this.invincible--;
+    if (this.hitTimer > 0) this.hitTimer--;
+    if (this.slideTimer > 0) this.slideTimer--;
+
+    this.vy += 0.6;
+    this.y += this.vy;
+    this.x += this.vx;
+
+    const ground = 400;
+    if (this.y >= ground) {
+      this.y = ground;
+      this.vy = 0;
+      this.grounded = true;
+    } else {
+      this.grounded = false;
+    }
+
+    if (this.slideTimer <= 0) {
+      this.vx *= 0.85;
+    } else {
+      this.vx *= 0.97;
+    }
+
+    if (this.x < 30) this.x = 30;
+    if (this.x > 770) this.x = 770;
+
+    if (!this.isAttacking || this.attackType !== 1) {
+      this.facing = other.x > this.x ? 1 : -1;
+    }
+
+    if (this.isAttacking) {
+      this.attackTimer--;
+      if (this.attackTimer <= 0) {
+        this.isAttacking = false;
+      }
+    }
+  }
+
+  attack(type) {
+    if (this.attackCooldown > 0 || this.isAttacking) return;
+    this.isAttacking = true;
+    this.attackType = type;
+    switch (type) {
+      case 0:
+        this.attackTimer = 12;
+        this.attackCooldown = 20;
+        break;
+      case 1:
+        this.attackTimer = 20;
+        this.attackCooldown = 35;
+        this.vx = this.facing * 8;
+        this.slideTimer = 20;
+        break;
+      case 2:
+        this.attackTimer = 15;
+        this.attackCooldown = 30;
+        this.vy = 6;
+        this.vx = this.facing * 3;
+        break;
+    }
+  }
+
+  getAttackBox() {
+    if (!this.isAttacking) return null;
+    switch (this.attackType) {
+      case 0:
+        return { x: this.x + this.facing * 25, y: this.y - 15, w: 30, h: 20 };
+      case 1:
+        return { x: this.x + this.facing * 10, y: this.y + 10, w: 45, h: 20 };
+      case 2:
+        return { x: this.x - 15, y: this.y, w: 30, h: 30 };
+    }
+  }
+
+  takeDamage(dmg, fromX) {
+    if (this.invincible > 0) return;
+    this.hp -= dmg;
+    if (this.hp < 0) this.hp = 0;
+    this.hitTimer = 10;
+    this.invincible = 15;
+    this.vx = (this.x > fromX ? 1 : -1) * 5;
+    this.vy = -4;
+
+    shakeTimer = 8;
+    shakeIntensity = dmg * 0.4;
+
+    for (let i = 0; i < 8; i++) {
+      particles.push({
+        x: this.x, y: this.y - 20,
+        vx: (Math.random() - 0.5) * 8,
+        vy: (Math.random() - 1) * 6,
+        life: 20 + Math.random() * 15,
+        color: this.isLocal ? '#6ec6ff' : '#ff6e6e',
+        size: 3 + Math.random() * 4
+      });
+    }
+
+    damageTexts.push({
+      x: this.x, y: this.y - 40,
+      text: Math.floor(dmg).toString(),
+      life: 40, vy: -2, color: '#ffdd44'
+    });
+  }
+
+  draw() {
+    const px = this.x, py = this.y, f = this.facing;
+    ctx.save();
+    ctx.translate(px, py);
+
+    if (this.hitTimer > 0 && this.hitTimer % 4 < 2) ctx.globalAlpha = 0.5;
+    if (this.invincible > 0 && this.invincible % 6 < 3) ctx.globalAlpha = 0.7;
+    if (this.slideTimer > 0) ctx.rotate(f * 0.3);
+
+    const wobble = Math.sin(this.animTimer * 2) * 2;
+
+    // Body
+    ctx.fillStyle = this.isLocal ? '#2d2d3d' : '#3d2d2d';
+    ctx.beginPath();
+    ctx.ellipse(0, -22 + wobble, 18, 25, 0, 0, Math.PI * 2);
+    ctx.fill();
+
+    // Belly
+    ctx.fillStyle = '#f0f0f0';
+    ctx.beginPath();
+    ctx.ellipse(0, -18 + wobble, 11, 18, 0, 0, Math.PI * 2);
+    ctx.fill();
+
+    // Eyes
+    const eyeY = -32 + wobble;
+    ctx.fillStyle = '#fff';
+    ctx.beginPath(); ctx.ellipse(f * 5 - 3, eyeY, 5, 6, 0, 0, Math.PI * 2); ctx.fill();
+    ctx.beginPath(); ctx.ellipse(f * 5 + 5, eyeY, 5, 6, 0, 0, Math.PI * 2); ctx.fill();
+    ctx.fillStyle = '#111';
+    ctx.beginPath(); ctx.ellipse(f * 5 - 3 + f * 2, eyeY, 2.5, 3, 0, 0, Math.PI * 2); ctx.fill();
+    ctx.beginPath(); ctx.ellipse(f * 5 + 5 + f * 2, eyeY, 2.5, 3, 0, 0, Math.PI * 2); ctx.fill();
+
+    // Beak
+    ctx.fillStyle = '#f4a623';
+    ctx.beginPath();
+    ctx.moveTo(f * 12, -28 + wobble);
+    ctx.lineTo(f * 22, -25 + wobble);
+    ctx.lineTo(f * 12, -22 + wobble);
+    ctx.closePath();
+    ctx.fill();
+
+    // Flippers
+    const flapAngle = this.isAttacking && this.attackType === 0
+      ? f * -1.2 : Math.sin(this.animTimer * 3) * 0.2;
+    ctx.save();
+    ctx.translate(-14, -25 + wobble);
+    ctx.rotate(flapAngle - 0.3);
+    ctx.fillStyle = this.isLocal ? '#2d2d3d' : '#3d2d2d';
+    ctx.beginPath(); ctx.ellipse(0, 10, 5, 14, -0.2, 0, Math.PI * 2); ctx.fill();
+    ctx.restore();
+    ctx.save();
+    ctx.translate(14, -25 + wobble);
+    ctx.rotate(-flapAngle + 0.3);
+    ctx.fillStyle = this.isLocal ? '#2d2d3d' : '#3d2d2d';
+    ctx.beginPath(); ctx.ellipse(0, 10, 5, 14, 0.2, 0, Math.PI * 2); ctx.fill();
+    ctx.restore();
+
+    // Feet
+    ctx.fillStyle = '#f4a623';
+    ctx.beginPath(); ctx.ellipse(-8, 2, 8, 4, -0.2, 0, Math.PI * 2); ctx.fill();
+    ctx.beginPath(); ctx.ellipse(8, 2, 8, 4, 0.2, 0, Math.PI * 2); ctx.fill();
+
+    // Label
+    ctx.font = 'bold 12px sans-serif';
+    ctx.textAlign = 'center';
+    if (this.isLocal) {
+      ctx.fillStyle = '#4a90d9';
+      ctx.fillText('YOU', 0, -55);
+      ctx.beginPath(); ctx.moveTo(0, -50); ctx.lineTo(-5, -45); ctx.lineTo(5, -45); ctx.closePath(); ctx.fill();
+    } else {
+      ctx.fillStyle = '#d94a4a';
+      ctx.fillText('RIVAL', 0, -55);
+    }
+
+    // Attack effects
+    if (this.isAttacking) {
+      ctx.globalAlpha = 0.6;
+      if (this.attackType === 0) {
+        ctx.strokeStyle = '#fff'; ctx.lineWidth = 3;
+        for (let i = 0; i < 3; i++) {
+          const angle = f * (-0.5 + i * 0.3);
+          ctx.beginPath(); ctx.moveTo(f * 20, -25);
+          ctx.lineTo(f * 20 + Math.cos(angle) * 20, -25 + Math.sin(angle) * 20);
+          ctx.stroke();
+        }
+      } else if (this.attackType === 1) {
+        ctx.fillStyle = '#fff';
+        for (let i = 0; i < 5; i++) {
+          ctx.beginPath();
+          ctx.arc(-f * 15 + Math.random() * 10, 5 + Math.random() * 5, 2, 0, Math.PI * 2);
+          ctx.fill();
+        }
+      } else if (this.attackType === 2) {
+        ctx.strokeStyle = '#ffdd44'; ctx.lineWidth = 2;
+        const r = (15 - this.attackTimer) * 3;
+        ctx.beginPath(); ctx.arc(0, 5, r, 0, Math.PI * 2); ctx.stroke();
+      }
+    }
+    ctx.restore();
+  }
+}
+
+// ===== GAME OBJECTS =====
+let localPenguin, remotePenguin;
+
+function myPenguin() { return localPenguin; }
+function opponentPenguin() { return remotePenguin; }
+
+function resetBattle() {
+  // p1 is left, p2 is right
+  if (myRole === 'p1') {
+    localPenguin = new Penguin(200, 400, true);
+    remotePenguin = new Penguin(600, 400, false);
+  } else {
+    localPenguin = new Penguin(600, 400, true);
+    remotePenguin = new Penguin(200, 400, false);
+  }
+  particles = [];
+  damageTexts = [];
+  battleStartTimer = 90;
+  frameCount = 0;
+}
+
+// Initial penguins for pre-lobby rendering
+localPenguin = new Penguin(200, 400, true);
+remotePenguin = new Penguin(600, 400, false);
+
+// ===== DRAWING FUNCTIONS =====
+function drawHPBar(x, y, w, h, hp, maxHp, color, label) {
+  const ratio = hp / maxHp;
+  ctx.fillStyle = '#333';
+  ctx.fillRect(x, y, w, h);
+  const barColor = ratio > 0.5 ? color : ratio > 0.25 ? '#f4a623' : '#d94a4a';
+  ctx.fillStyle = barColor;
+  ctx.fillRect(x, y, w * ratio, h);
+  ctx.strokeStyle = '#fff'; ctx.lineWidth = 2;
+  ctx.strokeRect(x, y, w, h);
+  ctx.fillStyle = '#fff'; ctx.font = 'bold 14px sans-serif';
+  ctx.textAlign = 'left';
+  ctx.fillText(label, x, y - 5);
+  ctx.textAlign = 'center';
+  ctx.fillText(`${Math.ceil(hp)} / ${maxHp}`, x + w / 2, y + h - 4);
+}
+
+function drawBackground() {
+  const grad = ctx.createLinearGradient(0, 0, 0, 500);
+  grad.addColorStop(0, '#0f1b33');
+  grad.addColorStop(0.6, '#1a3a5c');
+  grad.addColorStop(1, '#2a5a8c');
+  ctx.fillStyle = grad;
+  ctx.fillRect(0, 0, 800, 500);
+
+  ctx.fillStyle = '#fff';
+  for (let i = 0; i < 30; i++) {
+    const sx = (i * 137 + 50) % 800;
+    const sy = (i * 97 + 20) % 250;
+    const ss = 1 + (i % 3);
+    ctx.globalAlpha = 0.3 + Math.sin(Date.now() * 0.002 + i) * 0.3;
+    ctx.beginPath(); ctx.arc(sx, sy, ss, 0, Math.PI * 2); ctx.fill();
+  }
+  ctx.globalAlpha = 1;
+
+  const snowGrad = ctx.createLinearGradient(0, 400, 0, 500);
+  snowGrad.addColorStop(0, '#e8f0ff');
+  snowGrad.addColorStop(1, '#b8d0f0');
+  ctx.fillStyle = snowGrad;
+  ctx.beginPath();
+  ctx.moveTo(0, 410);
+  for (let x = 0; x <= 800; x += 20) {
+    ctx.lineTo(x, 405 + Math.sin(x * 0.03) * 5);
+  }
+  ctx.lineTo(800, 500);
+  ctx.lineTo(0, 500);
+  ctx.closePath();
+  ctx.fill();
+
+  ctx.fillStyle = 'rgba(180, 220, 255, 0.3)';
+  ctx.fillRect(50, 360, 40, 45);
+  ctx.fillRect(710, 365, 35, 40);
+  ctx.fillStyle = 'rgba(160, 210, 255, 0.2)';
+  ctx.fillRect(380, 370, 50, 35);
+}
+
+function updateParticles() {
+  for (let i = particles.length - 1; i >= 0; i--) {
+    const p = particles[i];
+    p.x += p.vx; p.y += p.vy; p.vy += 0.2; p.life--;
+    if (p.life <= 0) { particles.splice(i, 1); continue; }
+    ctx.globalAlpha = p.life / 30;
+    ctx.fillStyle = p.color;
+    ctx.beginPath(); ctx.arc(p.x, p.y, p.size, 0, Math.PI * 2); ctx.fill();
+  }
+  ctx.globalAlpha = 1;
+}
+
+function updateDamageTexts() {
+  for (let i = damageTexts.length - 1; i >= 0; i--) {
+    const dt = damageTexts[i];
+    dt.y += dt.vy; dt.life--;
+    if (dt.life <= 0) { damageTexts.splice(i, 1); continue; }
+    ctx.globalAlpha = dt.life / 40;
+    ctx.fillStyle = dt.color;
+    ctx.font = 'bold 20px sans-serif'; ctx.textAlign = 'center';
+    ctx.fillText(dt.text, dt.x, dt.y);
+  }
+  ctx.globalAlpha = 1;
+}
+
+// ===== INPUT & NETWORK =====
+let lastSentInput = null;
+
+function handleLocalInput() {
+  if (localPenguin.hitTimer > 0) return;
+
+  const inp = {
+    left: !!(keys['ArrowLeft'] || keys['a'] || touchState.left),
+    right: !!(keys['ArrowRight'] || keys['d'] || touchState.right),
+    up: !!(keys['ArrowUp'] || keys['w'] || touchState.up),
+    atk: (keys['z'] || keys['j']) ? 0
+       : (keys['x'] || keys['k']) ? 1
+       : (keys['c'] || keys['l']) ? 2
+       : touchState.atk,
+  };
+
+  // Apply locally
+  if (inp.left) localPenguin.vx -= 1.0;
+  if (inp.right) localPenguin.vx += 1.0;
+  if (inp.up && localPenguin.grounded) localPenguin.vy = -12;
+  if (inp.atk >= 0) localPenguin.attack(inp.atk);
+  if (Math.abs(localPenguin.vx) > 5) localPenguin.vx = 5 * Math.sign(localPenguin.vx);
+
+  // Send to server (only when changed, to reduce messages)
+  const inputKey = `${inp.left}${inp.right}${inp.up}${inp.atk}`;
+  if (inputKey !== lastSentInput && ws && ws.readyState === WebSocket.OPEN) {
+    ws.send(JSON.stringify({
+      action: 'input',
+      room: roomCode,
+      frame: frameCount,
+      left: inp.left ? 1 : 0,
+      right: inp.right ? 1 : 0,
+      up: inp.up ? 1 : 0,
+      atk: inp.atk,
+    }));
+    lastSentInput = inputKey;
+  }
+}
+
+function applyRemoteInput() {
+  if (remotePenguin.hitTimer > 0) return;
+  if (remoteInput.left) remotePenguin.vx -= 1.0;
+  if (remoteInput.right) remotePenguin.vx += 1.0;
+  if (remoteInput.up && remotePenguin.grounded) remotePenguin.vy = -12;
+  if (remoteInput.atk >= 0) remotePenguin.attack(remoteInput.atk);
+  if (Math.abs(remotePenguin.vx) > 5) remotePenguin.vx = 5 * Math.sign(remotePenguin.vx);
+}
+
+// ===== ATTACK HIT DETECTION =====
+function checkAttacks(attacker, defender) {
+  const atkBox = attacker.getAttackBox();
+  if (!atkBox) return;
+  const expectedFrame = attacker.attackType === 1 ? 15 : attacker.attackType === 2 ? 10 : 8;
+  if (attacker.attackTimer !== expectedFrame) return;
+
+  const hit = Math.abs(atkBox.x - defender.x) < atkBox.w &&
+              Math.abs(atkBox.y - (defender.y - 20)) < atkBox.h + 15;
+
+  if (hit && attacker.isLocal && ws && ws.readyState === WebSocket.OPEN) {
+    // Report hit to server for authoritative damage
+    ws.send(JSON.stringify({
+      action: 'hit',
+      room: roomCode,
+      attackType: attacker.attackType,
+    }));
+  }
+}
+
+// ===== MAIN GAME LOOP =====
+function gameLoop() {
+  ctx.save();
+
+  if (shakeTimer > 0) {
+    shakeTimer--;
+    ctx.translate((Math.random() - 0.5) * shakeIntensity, (Math.random() - 0.5) * shakeIntensity);
+    shakeIntensity *= 0.85;
+  }
+
+  drawBackground();
+
+  if (gameState === STATE.LOBBY) {
+    // Just draw background, lobby overlay handles UI
+  } else if (gameState === STATE.BATTLE) {
+    updateBattle();
+  } else if (gameState === STATE.WIN || gameState === STATE.LOSE) {
+    drawResult();
+  }
+
+  ctx.restore();
+  requestAnimationFrame(gameLoop);
+}
+
+function updateBattle() {
+  if (battleStartTimer > 0) {
+    battleStartTimer--;
+    localPenguin.draw();
+    remotePenguin.draw();
+    drawHPBar(30, 25, 250, 22, localPenguin.hp, localPenguin.maxHp, '#4a90d9', 'YOU');
+    drawHPBar(520, 25, 250, 22, remotePenguin.hp, remotePenguin.maxHp, '#d94a4a', 'RIVAL');
+
+    ctx.fillStyle = '#fff';
+    ctx.font = 'bold 60px sans-serif';
+    ctx.textAlign = 'center';
+    if (battleStartTimer > 60) ctx.fillText('3', 400, 250);
+    else if (battleStartTimer > 30) ctx.fillText('2', 400, 250);
+    else ctx.fillText('1', 400, 250);
+    return;
+  }
+
+  frameCount++;
+  handleLocalInput();
+  applyRemoteInput();
+  localPenguin.update(remotePenguin);
+  remotePenguin.update(localPenguin);
+
+  checkAttacks(localPenguin, remotePenguin);
+  checkAttacks(remotePenguin, localPenguin);
+
+  localPenguin.draw();
+  remotePenguin.draw();
+  updateParticles();
+  updateDamageTexts();
+
+  drawHPBar(30, 25, 250, 22, localPenguin.hp, localPenguin.maxHp, '#4a90d9', 'YOU');
+  drawHPBar(520, 25, 250, 22, remotePenguin.hp, remotePenguin.maxHp, '#d94a4a', 'RIVAL');
+
+  // Win/lose check
+  if (remotePenguin.hp <= 0) {
+    gameState = STATE.WIN;
+    spawnConfetti();
+    if (ws && ws.readyState === WebSocket.OPEN) {
+      ws.send(JSON.stringify({ action: 'end', room: roomCode, winner: myRole }));
+    }
+  }
+  if (localPenguin.hp <= 0) {
+    gameState = STATE.LOSE;
+    const opponentRole = myRole === 'p1' ? 'p2' : 'p1';
+    if (ws && ws.readyState === WebSocket.OPEN) {
+      ws.send(JSON.stringify({ action: 'end', room: roomCode, winner: opponentRole }));
+    }
+  }
+}
+
+function spawnConfetti() {
+  for (let i = 0; i < 50; i++) {
+    particles.push({
+      x: 400 + (Math.random() - 0.5) * 300, y: 200,
+      vx: (Math.random() - 0.5) * 10,
+      vy: -Math.random() * 8 - 3,
+      life: 60 + Math.random() * 40,
+      color: ['#ff6b6b', '#4ecdc4', '#ffe66d', '#a8e6cf', '#ff8a80', '#80d8ff'][Math.floor(Math.random() * 6)],
+      size: 3 + Math.random() * 5
+    });
+  }
+}
+
+function drawResult() {
+  localPenguin.draw();
+  remotePenguin.draw();
+  updateParticles();
+  updateDamageTexts();
+
+  drawHPBar(30, 25, 250, 22, localPenguin.hp, localPenguin.maxHp, '#4a90d9', 'YOU');
+  drawHPBar(520, 25, 250, 22, remotePenguin.hp, remotePenguin.maxHp, '#d94a4a', 'RIVAL');
+
+  ctx.fillStyle = 'rgba(0, 0, 0, 0.5)';
+  ctx.fillRect(0, 150, 800, 200);
+
+  ctx.font = 'bold 50px sans-serif';
+  ctx.textAlign = 'center';
+
+  if (gameState === STATE.WIN) {
+    ctx.fillStyle = '#4ecdc4';
+    ctx.fillText('YOU WIN!', 400, 240);
+    ctx.font = '20px sans-serif'; ctx.fillStyle = '#fff';
+    ctx.fillText('Your penguin is victorious!', 400, 280);
+  } else {
+    ctx.fillStyle = '#ff6b6b';
+    ctx.fillText('YOU LOSE...', 400, 240);
+    ctx.font = '20px sans-serif'; ctx.fillStyle = '#fff';
+    ctx.fillText('Better luck next time...', 400, 280);
+  }
+
+  ctx.font = 'bold 18px sans-serif';
+  ctx.fillStyle = '#ffdd44';
+  const blink = Math.sin(Date.now() * 0.005) > 0;
+  if (blink) {
+    ctx.fillText('Tap to return to Lobby', 400, 330);
+  }
+
+  // Tap/click to return to lobby
+  if (keys[' '] || keys['Enter']) {
+    returnToLobby();
+  }
+}
+
+// Tap on canvas for result screen
+canvas.addEventListener('touchstart', (e) => {
+  e.preventDefault();
+  if (gameState === STATE.WIN || gameState === STATE.LOSE) {
+    returnToLobby();
+  }
+}, { passive: false });
+
+function returnToLobby() {
+  gameState = STATE.LOBBY;
+  lobbyEl.classList.remove('hidden');
+  statusMsg.textContent = '';
+  errorMsg.textContent = '';
+  joinBtn.disabled = roomInput.value.length !== 4;
+  roomCode = '';
+  myRole = '';
+  lastSentInput = null;
+  remoteInput.left = false;
+  remoteInput.right = false;
+  remoteInput.up = false;
+  remoteInput.atk = -1;
+}
+
+// ===== START =====
+gameLoop();
+</script>
+</body>
+</html>

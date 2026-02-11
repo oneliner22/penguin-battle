@@ -1,0 +1,219 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: Penguin Battle PvP WebSocket API
+
+Parameters:
+  CodeBucket:
+    Type: String
+    Description: S3 bucket containing Lambda code
+  CodeKey:
+    Type: String
+    Description: S3 key for Lambda code zip
+
+Resources:
+  # IAM Role for Lambda functions
+  LambdaRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: PenguinBattleLambdaRole
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: lambda.amazonaws.com
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole
+      Policies:
+        - PolicyName: PenguinBattlePolicy
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - dynamodb:GetItem
+                  - dynamodb:PutItem
+                  - dynamodb:UpdateItem
+                  - dynamodb:DeleteItem
+                  - dynamodb:Scan
+                  - dynamodb:Query
+                Resource:
+                  - !GetAtt RoomsTable.Arn
+                  - !Sub "${RoomsTable.Arn}/index/*"
+              - Effect: Allow
+                Action:
+                  - execute-api:ManageConnections
+                Resource: !Sub "arn:aws:execute-api:${AWS::Region}:${AWS::AccountId}:${PenguinBattleWS}/*"
+
+  # WebSocket API
+  PenguinBattleWS:
+    Type: AWS::ApiGatewayV2::Api
+    Properties:
+      Name: PenguinBattlePvP
+      ProtocolType: WEBSOCKET
+      RouteSelectionExpression: "$request.body.action"
+
+  ProdStage:
+    Type: AWS::ApiGatewayV2::Stage
+    Properties:
+      ApiId: !Ref PenguinBattleWS
+      StageName: prod
+      AutoDeploy: true
+      DefaultRouteSettings:
+        ThrottlingRateLimit: 5
+        ThrottlingBurstLimit: 10
+
+  # Connect
+  ConnectFunction:
+    Type: AWS::Lambda::Function
+    Properties:
+      FunctionName: PenguinBattle-Connect
+      Runtime: nodejs20.x
+      Handler: src/connect.handler
+      Timeout: 10
+      MemorySize: 128
+      ReservedConcurrentExecutions: 5
+      Role: !GetAtt LambdaRole.Arn
+      Code:
+        S3Bucket: !Ref CodeBucket
+        S3Key: !Ref CodeKey
+      Environment:
+        Variables:
+          TABLE_NAME: !Ref RoomsTable
+
+  ConnectIntegration:
+    Type: AWS::ApiGatewayV2::Integration
+    Properties:
+      ApiId: !Ref PenguinBattleWS
+      IntegrationType: AWS_PROXY
+      IntegrationUri: !Sub "arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${ConnectFunction.Arn}/invocations"
+
+  ConnectRoute:
+    Type: AWS::ApiGatewayV2::Route
+    Properties:
+      ApiId: !Ref PenguinBattleWS
+      RouteKey: $connect
+      AuthorizationType: NONE
+      Target: !Sub "integrations/${ConnectIntegration}"
+
+  ConnectPermission:
+    Type: AWS::Lambda::Permission
+    Properties:
+      Action: lambda:InvokeFunction
+      FunctionName: !Ref ConnectFunction
+      Principal: apigateway.amazonaws.com
+      SourceArn: !Sub "arn:aws:execute-api:${AWS::Region}:${AWS::AccountId}:${PenguinBattleWS}/*/$connect"
+
+  # Disconnect
+  DisconnectFunction:
+    Type: AWS::Lambda::Function
+    Properties:
+      FunctionName: PenguinBattle-Disconnect
+      Runtime: nodejs20.x
+      Handler: src/disconnect.handler
+      Timeout: 10
+      MemorySize: 128
+      ReservedConcurrentExecutions: 5
+      Role: !GetAtt LambdaRole.Arn
+      Code:
+        S3Bucket: !Ref CodeBucket
+        S3Key: !Ref CodeKey
+      Environment:
+        Variables:
+          TABLE_NAME: !Ref RoomsTable
+          WEBSOCKET_ENDPOINT: !Sub "https://${PenguinBattleWS}.execute-api.${AWS::Region}.amazonaws.com/prod"
+
+  DisconnectIntegration:
+    Type: AWS::ApiGatewayV2::Integration
+    Properties:
+      ApiId: !Ref PenguinBattleWS
+      IntegrationType: AWS_PROXY
+      IntegrationUri: !Sub "arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${DisconnectFunction.Arn}/invocations"
+
+  DisconnectRoute:
+    Type: AWS::ApiGatewayV2::Route
+    Properties:
+      ApiId: !Ref PenguinBattleWS
+      RouteKey: $disconnect
+      AuthorizationType: NONE
+      Target: !Sub "integrations/${DisconnectIntegration}"
+
+  DisconnectPermission:
+    Type: AWS::Lambda::Permission
+    Properties:
+      Action: lambda:InvokeFunction
+      FunctionName: !Ref DisconnectFunction
+      Principal: apigateway.amazonaws.com
+      SourceArn: !Sub "arn:aws:execute-api:${AWS::Region}:${AWS::AccountId}:${PenguinBattleWS}/*/$disconnect"
+
+  # Default (message)
+  MessageFunction:
+    Type: AWS::Lambda::Function
+    Properties:
+      FunctionName: PenguinBattle-Message
+      Runtime: nodejs20.x
+      Handler: src/message.handler
+      Timeout: 10
+      MemorySize: 128
+      ReservedConcurrentExecutions: 5
+      Role: !GetAtt LambdaRole.Arn
+      Code:
+        S3Bucket: !Ref CodeBucket
+        S3Key: !Ref CodeKey
+      Environment:
+        Variables:
+          TABLE_NAME: !Ref RoomsTable
+          WEBSOCKET_ENDPOINT: !Sub "https://${PenguinBattleWS}.execute-api.${AWS::Region}.amazonaws.com/prod"
+
+  DefaultIntegration:
+    Type: AWS::ApiGatewayV2::Integration
+    Properties:
+      ApiId: !Ref PenguinBattleWS
+      IntegrationType: AWS_PROXY
+      IntegrationUri: !Sub "arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${MessageFunction.Arn}/invocations"
+
+  DefaultRoute:
+    Type: AWS::ApiGatewayV2::Route
+    Properties:
+      ApiId: !Ref PenguinBattleWS
+      RouteKey: $default
+      AuthorizationType: NONE
+      Target: !Sub "integrations/${DefaultIntegration}"
+
+  DefaultPermission:
+    Type: AWS::Lambda::Permission
+    Properties:
+      Action: lambda:InvokeFunction
+      FunctionName: !Ref MessageFunction
+      Principal: apigateway.amazonaws.com
+      SourceArn: !Sub "arn:aws:execute-api:${AWS::Region}:${AWS::AccountId}:${PenguinBattleWS}/*/$default"
+
+  # DynamoDB
+  RoomsTable:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      TableName: PenguinBattleRooms
+      BillingMode: PAY_PER_REQUEST
+      AttributeDefinitions:
+        - AttributeName: roomCode
+          AttributeType: S
+        - AttributeName: creatorIp
+          AttributeType: S
+      KeySchema:
+        - AttributeName: roomCode
+          KeyType: HASH
+      GlobalSecondaryIndexes:
+        - IndexName: IpIndex
+          KeySchema:
+            - AttributeName: creatorIp
+              KeyType: HASH
+          Projection:
+            ProjectionType: KEYS_ONLY
+      TimeToLiveSpecification:
+        AttributeName: ttl
+        Enabled: true
+
+Outputs:
+  WebSocketURL:
+    Description: WebSocket API URL
+    Value: !Sub "wss://${PenguinBattleWS}.execute-api.${AWS::Region}.amazonaws.com/prod"

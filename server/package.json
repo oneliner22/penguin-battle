@@ -1,0 +1,5 @@
+{
+  "name": "penguin-battle-pvp-server",
+  "version": "1.0.0",
+  "description": "Penguin Battle PvP WebSocket backend"
+}
