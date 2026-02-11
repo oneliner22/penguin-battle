@@ -5,7 +5,12 @@ const { ApiGatewayManagementApiClient, PostToConnectionCommand } = require('@aws
 const client = new DynamoDBClient({});
 const ddb = DynamoDBDocumentClient.from(client);
 const TABLE = process.env.TABLE_NAME;
+const THROTTLE_TABLE = process.env.THROTTLE_TABLE;
 const MAX_ROOMS_PER_IP = 3;
+const MSG_RATE_LIMIT = 18000;   // max messages per minute per IP
+const BAN_DURATION = 86400;     // 24 hours in seconds
+const SAMPLE_RATE = 0.05;       // 5% sampling
+const SAMPLE_MULTIPLIER = 20;   // 1/0.05 = compensate for sampling
 
 function getApiClient() {
   return new ApiGatewayManagementApiClient({ endpoint: process.env.WEBSOCKET_ENDPOINT });
@@ -50,6 +55,35 @@ function calcDamage(seed, hitCount, attackType, countered) {
 exports.handler = async (event) => {
   const connectionId = event.requestContext.connectionId;
   const sourceIp = event.requestContext.identity?.sourceIp || 'unknown';
+
+  // 5% sampled message rate tracking (before JSON.parse to catch garbage data)
+  if (THROTTLE_TABLE && sourceIp !== 'unknown' && Math.random() < SAMPLE_RATE) {
+    try {
+      const now = Math.floor(Date.now() / 1000);
+      const minute = Math.floor(now / 60);
+      const msgKey = `msg#${sourceIp}#${minute}`;
+      const result = await ddb.send(new UpdateCommand({
+        TableName: THROTTLE_TABLE,
+        Key: { pk: msgKey },
+        UpdateExpression: 'ADD #cnt :inc SET #ttl = if_not_exists(#ttl, :ttl)',
+        ExpressionAttributeNames: { '#cnt': 'cnt', '#ttl': 'ttl' },
+        ExpressionAttributeValues: { ':inc': SAMPLE_MULTIPLIER, ':ttl': now + 120 },
+        ReturnValues: 'UPDATED_NEW',
+      }));
+      if (result.Attributes.cnt > MSG_RATE_LIMIT) {
+        const banKey = `ban#${sourceIp}`;
+        await ddb.send(new PutCommand({
+          TableName: THROTTLE_TABLE,
+          Item: { pk: banKey, ttl: now + BAN_DURATION, reason: 'msg_rate', count: result.Attributes.cnt },
+        }));
+        console.log('Message rate ban:', sourceIp, 'count:', result.Attributes.cnt);
+      }
+    } catch (e) {
+      // Fail-open: ignore throttle errors
+      console.error('Message throttle error (fail-open):', e);
+    }
+  }
+
   let body;
   try {
     body = JSON.parse(event.body);

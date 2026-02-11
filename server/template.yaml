@@ -40,6 +40,7 @@ Resources:
                 Resource:
                   - !GetAtt RoomsTable.Arn
                   - !Sub "${RoomsTable.Arn}/index/*"
+                  - !GetAtt ThrottleTable.Arn
               - Effect: Allow
                 Action:
                   - execute-api:ManageConnections
@@ -80,6 +81,7 @@ Resources:
       Environment:
         Variables:
           TABLE_NAME: !Ref RoomsTable
+          THROTTLE_TABLE: !Ref ThrottleTable
 
   ConnectIntegration:
     Type: AWS::ApiGatewayV2::Integration
@@ -164,6 +166,7 @@ Resources:
         Variables:
           TABLE_NAME: !Ref RoomsTable
           WEBSOCKET_ENDPOINT: !Sub "https://${PenguinBattleWS}.execute-api.${AWS::Region}.amazonaws.com/prod"
+          THROTTLE_TABLE: !Ref ThrottleTable
 
   DefaultIntegration:
     Type: AWS::ApiGatewayV2::Integration
@@ -225,6 +228,21 @@ Resources:
               KeyType: HASH
           Projection:
             ProjectionType: KEYS_ONLY
+      TimeToLiveSpecification:
+        AttributeName: ttl
+        Enabled: true
+
+  ThrottleTable:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      TableName: PenguinBattleThrottle
+      BillingMode: PAY_PER_REQUEST
+      AttributeDefinitions:
+        - AttributeName: pk
+          AttributeType: S
+      KeySchema:
+        - AttributeName: pk
+          KeyType: HASH
       TimeToLiveSpecification:
         AttributeName: ttl
         Enabled: true
