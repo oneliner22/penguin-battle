@@ -17,6 +17,7 @@ body {
   font-family: 'Segoe UI', sans-serif;
   overflow: hidden;
   touch-action: none;
+  overscroll-behavior: none;
   -webkit-touch-callout: none;
   -webkit-user-select: none;
   user-select: none;
@@ -1354,6 +1355,25 @@ function returnToLobby() {
   myRole = '';
   lastRemoteState = null;
 }
+
+// ===== BACK NAVIGATION GUARD =====
+// Prevent accidental browser-back during battle
+function pushGuardState() {
+  history.pushState({ guard: true }, '');
+}
+pushGuardState();
+window.addEventListener('popstate', (e) => {
+  if (gameState !== STATE.LOBBY) {
+    // During battle/waiting: block back navigation
+    pushGuardState();
+  }
+  // In lobby: allow normal behavior (do nothing, state already popped)
+});
+window.addEventListener('beforeunload', (e) => {
+  if (gameState !== STATE.LOBBY) {
+    e.preventDefault();
+  }
+});
 
 // ===== START =====
 gameLoop();
