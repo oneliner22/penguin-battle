@@ -1,0 +1,340 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Penguin Battle Dashboard</title>
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4"></script>
+<style>
+* { margin: 0; padding: 0; box-sizing: border-box; }
+body { background: #0d1117; color: #c9d1d9; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; padding: 20px; }
+h1 { color: #58a6ff; margin-bottom: 8px; font-size: 1.4em; }
+h2 { color: #8b949e; font-size: 1.1em; margin: 24px 0 12px; border-bottom: 1px solid #21262d; padding-bottom: 6px; }
+.top-bar { display: flex; align-items: center; justify-content: space-between; margin-bottom: 16px; flex-wrap: wrap; gap: 8px; }
+.status { font-size: 0.85em; color: #8b949e; }
+.status .dot { display: inline-block; width: 8px; height: 8px; border-radius: 50%; margin-right: 4px; }
+.dot.on { background: #3fb950; }
+.dot.off { background: #f85149; }
+.controls { display: flex; gap: 8px; align-items: center; }
+.controls button, .controls select, .controls input {
+  background: #21262d; border: 1px solid #30363d; color: #c9d1d9; padding: 4px 10px; border-radius: 6px; font-size: 0.85em; cursor: pointer;
+}
+.controls button:hover { background: #30363d; }
+.controls button.active { background: #1f6feb; border-color: #1f6feb; }
+
+/* Cards */
+.cards { display: grid; grid-template-columns: repeat(auto-fit, minmax(160px, 1fr)); gap: 12px; }
+.card { background: #161b22; border: 1px solid #21262d; border-radius: 8px; padding: 16px; text-align: center; }
+.card .val { font-size: 2em; font-weight: bold; color: #58a6ff; }
+.card .label { font-size: 0.8em; color: #8b949e; margin-top: 4px; }
+.card.warn .val { color: #f0883e; }
+.card.danger .val { color: #f85149; }
+
+/* Charts */
+.chart-row { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; margin: 16px 0; }
+.chart-box { background: #161b22; border: 1px solid #21262d; border-radius: 8px; padding: 12px; }
+.chart-box canvas { max-height: 250px; }
+@media (max-width: 768px) { .chart-row { grid-template-columns: 1fr; } }
+
+/* Tables */
+table { width: 100%; border-collapse: collapse; font-size: 0.85em; margin: 8px 0; }
+th, td { padding: 6px 10px; text-align: left; border-bottom: 1px solid #21262d; }
+th { color: #8b949e; font-weight: 600; background: #161b22; position: sticky; top: 0; }
+tr:hover { background: #161b2288; }
+.flag { display: inline-block; font-size: 0.75em; padding: 1px 6px; border-radius: 4px; margin: 1px 2px; font-weight: 600; }
+.flag-FAST_MATCH { background: #f8514922; color: #f85149; }
+.flag-HIGH_HIT_COUNT { background: #f0883e22; color: #f0883e; }
+.flag-NO_HITS_WIN { background: #d2a8ff22; color: #d2a8ff; }
+.flag-SAME_IP { background: #f8514922; color: #f85149; }
+
+.table-wrap { max-height: 400px; overflow-y: auto; background: #161b22; border: 1px solid #21262d; border-radius: 8px; }
+.hidden { display: none; }
+.loading { text-align: center; color: #8b949e; padding: 20px; }
+
+/* Tabs */
+.tabs { display: flex; gap: 4px; margin-bottom: 16px; }
+.tab { padding: 6px 16px; border-radius: 6px 6px 0 0; cursor: pointer; background: #21262d; color: #8b949e; border: 1px solid #30363d; border-bottom: none; font-size: 0.9em; }
+.tab.active { background: #161b22; color: #58a6ff; border-color: #21262d; }
+</style>
+</head>
+<body>
+
+<div class="top-bar">
+  <div>
+    <h1>Penguin Battle Dashboard</h1>
+    <div class="status">
+      <span class="dot" id="statusDot"></span>
+      <span id="statusText">Connecting...</span>
+      <span id="serverTime" style="margin-left:12px"></span>
+    </div>
+  </div>
+  <div class="controls">
+    <button id="refreshBtn" onclick="refreshAll()">Refresh</button>
+    <button id="autoBtn" class="active" onclick="toggleAuto()">Auto: 60s</button>
+    <select id="periodSel" onchange="loadHistory()">
+      <option value="week">7 Days</option>
+      <option value="month">30 Days</option>
+    </select>
+    <input type="date" id="gameDate" onchange="loadGames()">
+  </div>
+</div>
+
+<div class="tabs">
+  <div class="tab active" onclick="showTab('overview')">Overview</div>
+  <div class="tab" onclick="showTab('history')">History</div>
+  <div class="tab" onclick="showTab('security')">Security</div>
+  <div class="tab" onclick="showTab('games')">Games</div>
+</div>
+
+<!-- Overview -->
+<div id="tab-overview">
+  <div class="cards" id="overviewCards">
+    <div class="card"><div class="val" id="vActiveRooms">-</div><div class="label">Waiting Rooms</div></div>
+    <div class="card"><div class="val" id="vPlayingRooms">-</div><div class="label">Playing</div></div>
+    <div class="card" id="cardBans"><div class="val" id="vBans">-</div><div class="label">Active Bans</div></div>
+    <div class="card"><div class="val" id="vGames">-</div><div class="label">Today's Games</div></div>
+    <div class="card"><div class="val" id="vPlayers">-</div><div class="label">Today's Players</div></div>
+  </div>
+</div>
+
+<!-- History -->
+<div id="tab-history" class="hidden">
+  <div class="cards" id="historyCards">
+    <div class="card"><div class="val" id="vPeriodGames">-</div><div class="label">Total Games</div></div>
+    <div class="card"><div class="val" id="vPeriodPlayers">-</div><div class="label">Unique Players</div></div>
+  </div>
+  <div class="chart-row">
+    <div class="chart-box"><canvas id="chartGames"></canvas></div>
+    <div class="chart-box"><canvas id="chartPlayers"></canvas></div>
+  </div>
+  <div class="chart-row">
+    <div class="chart-box"><canvas id="chartDuration"></canvas></div>
+    <div class="chart-box"><canvas id="chartWinRate"></canvas></div>
+  </div>
+</div>
+
+<!-- Security -->
+<div id="tab-security" class="hidden">
+  <h2>Active Bans</h2>
+  <div class="table-wrap">
+    <table id="bansTable">
+      <thead><tr><th>IP</th><th>Reason</th><th>Count</th><th>Expires</th><th>Remaining</th></tr></thead>
+      <tbody id="bansTbody"></tbody>
+    </table>
+  </div>
+  <h2>Top IPs (7 Days)</h2>
+  <div class="table-wrap">
+    <table>
+      <thead><tr><th>#</th><th>IP</th><th>Games</th><th>Region</th></tr></thead>
+      <tbody id="ipsTbody"></tbody>
+    </table>
+  </div>
+</div>
+
+<!-- Games -->
+<div id="tab-games" class="hidden">
+  <div id="gamesLoading" class="loading">Select a date or loading...</div>
+  <div class="table-wrap" style="max-height:600px">
+    <table>
+      <thead><tr><th>Time</th><th>Room</th><th>Winner</th><th>Duration</th><th>Hits</th><th>P1 HP</th><th>P2 HP</th><th>P1 IP</th><th>P2 IP</th><th>Flags</th></tr></thead>
+      <tbody id="gamesTbody"></tbody>
+    </table>
+  </div>
+</div>
+
+<script>
+// === CONFIG ===
+const API_URL = 'https://vybrgpnzp3.execute-api.ap-northeast-1.amazonaws.com';
+
+let autoRefresh = true;
+let autoTimer = null;
+let charts = {};
+const geoCache = {};
+
+// === TABS ===
+function showTab(name) {
+  document.querySelectorAll('[id^="tab-"]').forEach(el => el.classList.add('hidden'));
+  document.getElementById('tab-' + name).classList.remove('hidden');
+  document.querySelectorAll('.tab').forEach(el => el.classList.remove('active'));
+  [...document.querySelectorAll('.tab')].find(el => el.textContent.toLowerCase().includes(name)).classList.add('active');
+}
+
+// === FETCH ===
+async function api(path) {
+  const res = await fetch(API_URL + path);
+  if (!res.ok) throw new Error(`${res.status} ${res.statusText}`);
+  return res.json();
+}
+
+// === OVERVIEW ===
+async function loadOverview() {
+  try {
+    const d = await api('/stats/overview');
+    document.getElementById('vActiveRooms').textContent = d.activeRooms;
+    document.getElementById('vPlayingRooms').textContent = d.playingRooms;
+    document.getElementById('vBans').textContent = d.activeBans;
+    document.getElementById('vGames').textContent = d.todayGames;
+    document.getElementById('vPlayers').textContent = d.todayUniquePlayers;
+    document.getElementById('cardBans').className = 'card' + (d.activeBans > 0 ? ' danger' : '');
+    document.getElementById('statusDot').className = 'dot on';
+    document.getElementById('statusText').textContent = 'Connected';
+    document.getElementById('serverTime').textContent = new Date(d.serverTime).toLocaleString('ja-JP');
+  } catch (e) {
+    document.getElementById('statusDot').className = 'dot off';
+    document.getElementById('statusText').textContent = 'Error: ' + e.message;
+  }
+}
+
+// === HISTORY ===
+async function loadHistory() {
+  const period = document.getElementById('periodSel').value;
+  try {
+    const d = await api('/stats/history?period=' + period);
+    document.getElementById('vPeriodGames').textContent = d.periodTotalGames;
+    document.getElementById('vPeriodPlayers').textContent = d.periodUniquePlayers;
+
+    const labels = d.history.map(h => h.date.slice(5));
+    const games = d.history.map(h => h.games);
+    const players = d.history.map(h => h.uniquePlayers);
+    const durations = d.history.map(h => h.avgDuration);
+    const p1w = d.history.map(h => h.p1Wins);
+    const p2w = d.history.map(h => h.p2Wins);
+    const draws = d.history.map(h => h.draws);
+
+    updateChart('chartGames', 'line', labels, [{ label: 'Games', data: games, borderColor: '#58a6ff', backgroundColor: '#58a6ff33', fill: true }], 'Daily Games');
+    updateChart('chartPlayers', 'line', labels, [{ label: 'Unique Players', data: players, borderColor: '#3fb950', backgroundColor: '#3fb95033', fill: true }], 'DAU');
+    updateChart('chartDuration', 'bar', labels, [{ label: 'Avg Duration (s)', data: durations, backgroundColor: '#f0883e88' }], 'Avg Match Duration');
+    updateChart('chartWinRate', 'bar', labels, [
+      { label: 'P1 Wins', data: p1w, backgroundColor: '#58a6ff88' },
+      { label: 'P2 Wins', data: p2w, backgroundColor: '#f0883e88' },
+      { label: 'Draws', data: draws, backgroundColor: '#8b949e88' },
+    ], 'Win Distribution');
+  } catch (e) {
+    console.error('History load error:', e);
+  }
+}
+
+function updateChart(id, type, labels, datasets, title) {
+  if (charts[id]) charts[id].destroy();
+  const ctx = document.getElementById(id).getContext('2d');
+  const stacked = id === 'chartWinRate';
+  charts[id] = new Chart(ctx, {
+    type,
+    data: { labels, datasets },
+    options: {
+      responsive: true,
+      plugins: { title: { display: true, text: title, color: '#8b949e' }, legend: { labels: { color: '#8b949e' } } },
+      scales: {
+        x: { ticks: { color: '#8b949e' }, grid: { color: '#21262d' }, stacked },
+        y: { ticks: { color: '#8b949e' }, grid: { color: '#21262d' }, beginAtZero: true, stacked },
+      },
+    },
+  });
+}
+
+// === SECURITY ===
+async function loadSecurity() {
+  try {
+    const d = await api('/stats/security');
+    const bansTb = document.getElementById('bansTbody');
+    bansTb.innerHTML = d.bans.length === 0 ? '<tr><td colspan="5" style="text-align:center;color:#8b949e">No active bans</td></tr>' :
+      d.bans.map(b => `<tr>
+        <td>${esc(b.ip)}</td>
+        <td>${esc(b.reason)}</td>
+        <td>${b.count}</td>
+        <td>${new Date(b.expiresAt).toLocaleString('ja-JP')}</td>
+        <td>${formatSec(b.remainingSec)}</td>
+      </tr>`).join('');
+
+    const ipsTb = document.getElementById('ipsTbody');
+    ipsTb.innerHTML = d.topIps.map((ip, i) => `<tr>
+      <td>${i + 1}</td>
+      <td>${esc(ip.ip)}</td>
+      <td>${ip.games}</td>
+      <td class="geo" data-ip="${esc(ip.ip)}">...</td>
+    </tr>`).join('');
+
+    // Async geo lookup
+    d.topIps.slice(0, 20).forEach(ip => lookupGeo(ip.ip));
+  } catch (e) {
+    console.error('Security load error:', e);
+  }
+}
+
+async function lookupGeo(ip) {
+  if (geoCache[ip]) return updateGeoCell(ip, geoCache[ip]);
+  try {
+    const res = await fetch(`http://ip-api.com/json/${ip}?fields=country,city,isp`);
+    const d = await res.json();
+    const info = `${d.country || '?'} / ${d.city || '?'}`;
+    geoCache[ip] = info;
+    updateGeoCell(ip, info);
+  } catch { updateGeoCell(ip, '?'); }
+}
+
+function updateGeoCell(ip, text) {
+  document.querySelectorAll(`.geo[data-ip="${ip}"]`).forEach(el => el.textContent = text);
+}
+
+// === GAMES ===
+async function loadGames() {
+  const date = document.getElementById('gameDate').value;
+  if (!date) return;
+  document.getElementById('gamesLoading').style.display = 'block';
+  try {
+    const d = await api('/stats/games?date=' + date);
+    document.getElementById('gamesLoading').style.display = 'none';
+    const tb = document.getElementById('gamesTbody');
+    tb.innerHTML = d.games.length === 0 ? '<tr><td colspan="10" style="text-align:center;color:#8b949e">No games on this date</td></tr>' :
+      d.games.map(g => {
+        const flagHtml = g.flags.map(f => `<span class="flag flag-${f}">${f}</span>`).join('');
+        const rowClass = g.flags.length > 0 ? ' style="background:#f8514911"' : '';
+        return `<tr${rowClass}>
+          <td>${g.endedAt ? new Date(g.endedAt).toLocaleTimeString('ja-JP') : '-'}</td>
+          <td>${esc(g.roomCode)}</td>
+          <td>${g.winner}${g.timeup ? ' (TU)' : ''}</td>
+          <td>${g.durationSec}s</td>
+          <td>${g.hitCount}</td>
+          <td>${g.p1FinalHp != null ? g.p1FinalHp.toFixed(1) : '-'}</td>
+          <td>${g.p2FinalHp != null ? g.p2FinalHp.toFixed(1) : '-'}</td>
+          <td>${esc(g.p1Ip || '-')}</td>
+          <td>${esc(g.p2Ip || '-')}</td>
+          <td>${flagHtml || '-'}</td>
+        </tr>`;
+      }).join('');
+  } catch (e) {
+    document.getElementById('gamesLoading').textContent = 'Error: ' + e.message;
+  }
+}
+
+// === UTILS ===
+function esc(s) { const d = document.createElement('div'); d.textContent = s; return d.innerHTML; }
+function formatSec(s) {
+  if (s < 60) return s + 's';
+  if (s < 3600) return Math.floor(s / 60) + 'm';
+  return Math.floor(s / 3600) + 'h ' + Math.floor((s % 3600) / 60) + 'm';
+}
+
+// === AUTO REFRESH ===
+function toggleAuto() {
+  autoRefresh = !autoRefresh;
+  const btn = document.getElementById('autoBtn');
+  btn.textContent = autoRefresh ? 'Auto: 60s' : 'Auto: OFF';
+  btn.classList.toggle('active', autoRefresh);
+  if (autoRefresh) startAuto(); else stopAuto();
+}
+function startAuto() { stopAuto(); autoTimer = setInterval(refreshAll, 60000); }
+function stopAuto() { if (autoTimer) { clearInterval(autoTimer); autoTimer = null; } }
+
+async function refreshAll() {
+  await Promise.all([loadOverview(), loadHistory(), loadSecurity()]);
+  if (document.getElementById('gameDate').value) loadGames();
+}
+
+// === INIT ===
+document.getElementById('gameDate').value = new Date().toISOString().slice(0, 10);
+refreshAll();
+startAuto();
+</script>
+</body>
+</html>

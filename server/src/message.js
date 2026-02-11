@@ -11,6 +11,7 @@ const MSG_RATE_LIMIT = 18000;   // max messages per minute per IP
 const BAN_DURATION = 86400;     // 24 hours in seconds
 const SAMPLE_RATE = 0.05;       // 5% sampling
 const SAMPLE_MULTIPLIER = 20;   // 1/0.05 = compensate for sampling
+const GAMELOG_TABLE = process.env.GAMELOG_TABLE;
 
 function getApiClient() {
   return new ApiGatewayManagementApiClient({ endpoint: process.env.WEBSOCKET_ENDPOINT });
@@ -129,7 +130,7 @@ exports.handler = async (event) => {
           await ddb.send(new UpdateCommand({
             TableName: TABLE,
             Key: { roomCode },
-            UpdateExpression: 'SET p2ConnectionId = :cid, #s = :playing, seed = :seed, hitCount = :zero',
+            UpdateExpression: 'SET p2ConnectionId = :cid, #s = :playing, seed = :seed, hitCount = :zero, p2Ip = :p2Ip, p1Hp = :maxHp, p2Hp = :maxHp',
             ExpressionAttributeNames: { '#s': 'status' },
             ConditionExpression: 'p2ConnectionId = :empty OR attribute_not_exists(p2ConnectionId)',
             ExpressionAttributeValues: {
@@ -138,6 +139,8 @@ exports.handler = async (event) => {
               ':seed': seed,
               ':zero': 0,
               ':empty': '',
+              ':p2Ip': sourceIp,
+              ':maxHp': 100,
             },
           }));
 
@@ -175,6 +178,7 @@ exports.handler = async (event) => {
             status: 'waiting',
             seed: 0,
             hitCount: 0,
+            createdAt: Math.floor(Date.now() / 1000),
             ttl: Math.floor(Date.now() / 1000) + 300, // 5 minutes
           },
         }));
@@ -227,19 +231,21 @@ exports.handler = async (event) => {
       const newHitCount = (room.hitCount || 0) + 1;
       const dmg = calcDamage(room.seed, newHitCount, body.attackType || 0, countered);
 
-      await ddb.send(new UpdateCommand({
-        TableName: TABLE,
-        Key: { roomCode },
-        UpdateExpression: 'SET hitCount = :hc',
-        ExpressionAttributeValues: { ':hc': newHitCount },
-      }));
-
       // Determine target — if countered, damage goes back to the attacker
       const attackerRole = room.p1ConnectionId === connectionId ? 'p1' : 'p2';
       const defenderRole = attackerRole === 'p1' ? 'p2' : 'p1';
       const target = countered ? attackerRole : defenderRole;
+      const hpField = target === 'p1' ? 'p1Hp' : 'p2Hp';
+      const roundedDmg = Math.round(dmg * 10) / 10;
 
-      const dmgMsg = { type: 'damage', target, dmg: Math.round(dmg * 10) / 10, hitNum: newHitCount, countered };
+      await ddb.send(new UpdateCommand({
+        TableName: TABLE,
+        Key: { roomCode },
+        UpdateExpression: `SET hitCount = :hc, ${hpField} = if_not_exists(${hpField}, :maxHp) - :dmg`,
+        ExpressionAttributeValues: { ':hc': newHitCount, ':dmg': roundedDmg, ':maxHp': 100 },
+      }));
+
+      const dmgMsg = { type: 'damage', target, dmg: roundedDmg, hitNum: newHitCount, countered };
       await sendTo(api, room.p1ConnectionId, dmgMsg);
       await sendTo(api, room.p2ConnectionId, dmgMsg);
       break;
@@ -256,6 +262,38 @@ exports.handler = async (event) => {
       if (room.p1ConnectionId !== connectionId && room.p2ConnectionId !== connectionId) break;
 
       const winner = body.winner || 'unknown';
+      const now = Math.floor(Date.now() / 1000);
+
+      // Write game log (fail-open, idempotent via ConditionExpression)
+      if (GAMELOG_TABLE) {
+        try {
+          const dateKey = new Date().toISOString().slice(0, 10);
+          await ddb.send(new PutCommand({
+            TableName: GAMELOG_TABLE,
+            Item: {
+              dateKey,
+              matchId: `${Date.now()}#${roomCode}`,
+              roomCode,
+              winner,
+              timeup: !!body.timeup,
+              durationSec: room.createdAt ? now - room.createdAt : 0,
+              hitCount: room.hitCount || 0,
+              p1Ip: room.creatorIp || 'unknown',
+              p2Ip: room.p2Ip || 'unknown',
+              p1FinalHp: Math.round((room.p1Hp ?? 100) * 10) / 10,
+              p2FinalHp: Math.round((room.p2Hp ?? 100) * 10) / 10,
+              seed: room.seed || 0,
+              endedAt: now,
+            },
+            ConditionExpression: 'attribute_not_exists(matchId)',
+          }));
+        } catch (e) {
+          if (e.name !== 'ConditionalCheckFailedException') {
+            console.error('GameLog write error (fail-open):', e);
+          }
+        }
+      }
+
       const endMsg = { type: 'end', winner };
       if (body.timeup) endMsg.timeup = true;
 

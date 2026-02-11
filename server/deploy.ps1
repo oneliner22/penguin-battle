@@ -6,6 +6,7 @@ $WAF_STACK_NAME = "penguin-battle-waf"
 $REGION = "ap-northeast-1"
 $WAF_REGION = "us-east-1"
 $CODE_KEY = "penguin-battle/lambda-code.zip"
+$ADMIN_IPS = ""  # Comma-separated admin IPs for dashboard access (e.g. "1.2.3.4,5.6.7.8")
 
 Write-Host "=== Packaging Lambda code ===" -ForegroundColor Cyan
 $zipPath = Join-Path $PSScriptRoot "lambda-code.zip"
@@ -21,7 +22,7 @@ aws cloudformation deploy `
   --stack-name $STACK_NAME `
   --region $REGION `
   --capabilities CAPABILITY_NAMED_IAM `
-  --parameter-overrides "CodeBucket=${BUCKET}" "CodeKey=${CODE_KEY}" "WAFIPSetId=" "WAFIPSetName="
+  --parameter-overrides "CodeBucket=${BUCKET}" "CodeKey=${CODE_KEY}" "WAFIPSetId=" "WAFIPSetName=" "AdminIPs=${ADMIN_IPS}"
 
 Write-Host "=== Getting API Gateway domain ===" -ForegroundColor Cyan
 $apiDomain = aws cloudformation describe-stacks `
@@ -69,20 +70,30 @@ aws cloudformation deploy `
   --stack-name $STACK_NAME `
   --region $REGION `
   --capabilities CAPABILITY_NAMED_IAM `
-  --parameter-overrides "CodeBucket=${BUCKET}" "CodeKey=${CODE_KEY}" "WAFIPSetId=${ipSetId}" "WAFIPSetName=${ipSetName}"
+  --parameter-overrides "CodeBucket=${BUCKET}" "CodeKey=${CODE_KEY}" "WAFIPSetId=${ipSetId}" "WAFIPSetName=${ipSetName}" "AdminIPs=${ADMIN_IPS}"
 
 Write-Host "=== Updating Lambda function code ===" -ForegroundColor Cyan
 aws lambda update-function-code --function-name PenguinBattle-Connect --s3-bucket $BUCKET --s3-key $CODE_KEY --region $REGION --output text --query 'LastModified'
 aws lambda update-function-code --function-name PenguinBattle-Message --s3-bucket $BUCKET --s3-key $CODE_KEY --region $REGION --output text --query 'LastModified'
 aws lambda update-function-code --function-name PenguinBattle-Disconnect --s3-bucket $BUCKET --s3-key $CODE_KEY --region $REGION --output text --query 'LastModified'
 aws lambda update-function-code --function-name PenguinBattle-WafSync --s3-bucket $BUCKET --s3-key $CODE_KEY --region $REGION --output text --query 'LastModified'
+aws lambda update-function-code --function-name PenguinBattle-Dashboard --s3-bucket $BUCKET --s3-key $CODE_KEY --region $REGION --output text --query 'LastModified'
+
+Write-Host "=== Getting Dashboard API URL ===" -ForegroundColor Cyan
+$dashUrl = aws cloudformation describe-stacks `
+  --stack-name $STACK_NAME `
+  --region $REGION `
+  --query "Stacks[0].Outputs[?OutputKey=='DashboardAPIURL'].OutputValue" `
+  --output text
 
 Write-Host ""
 Write-Host "=== Deployment Complete ===" -ForegroundColor Green
 Write-Host "WebSocket URL (CloudFront): wss://${cfDomain}" -ForegroundColor Green
 Write-Host "WebSocket URL (Direct):     wss://${apiDomain}/prod" -ForegroundColor Yellow
+Write-Host "Dashboard API URL:          ${dashUrl}" -ForegroundColor Green
 Write-Host ""
 Write-Host "Update pvp/index.html WS_URL to: wss://${cfDomain}" -ForegroundColor Yellow
+Write-Host "Update admin-dashboard.html API_URL to: ${dashUrl}" -ForegroundColor Yellow
 
 # Clean up
 Remove-Item $zipPath

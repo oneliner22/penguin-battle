@@ -16,6 +16,10 @@ Parameters:
     Type: String
     Description: WAF IP Set Name (from penguin-battle-waf stack)
     Default: ''
+  AdminIPs:
+    Type: String
+    Description: Comma-separated admin IP addresses for dashboard access
+    Default: ''
 
 Resources:
   # IAM Role for Lambda functions
@@ -49,6 +53,8 @@ Resources:
                   - !GetAtt RoomsTable.Arn
                   - !Sub "${RoomsTable.Arn}/index/*"
                   - !GetAtt ThrottleTable.Arn
+                  - !GetAtt GameLogTable.Arn
+                  - !Sub "${GameLogTable.Arn}/index/*"
               - Effect: Allow
                 Action:
                   - execute-api:ManageConnections
@@ -175,6 +181,7 @@ Resources:
           TABLE_NAME: !Ref RoomsTable
           WEBSOCKET_ENDPOINT: !Sub "https://${PenguinBattleWS}.execute-api.${AWS::Region}.amazonaws.com/prod"
           THROTTLE_TABLE: !Ref ThrottleTable
+          GAMELOG_TABLE: !Ref GameLogTable
 
   DefaultIntegration:
     Type: AWS::ApiGatewayV2::Integration
@@ -321,6 +328,120 @@ Resources:
         Filters:
           - Pattern: '{"dynamodb":{"Keys":{"pk":{"S":[{"prefix":"ban#"}]}}}}'
 
+  # GameLog DynamoDB
+  GameLogTable:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      TableName: PenguinBattleGameLog
+      BillingMode: PAY_PER_REQUEST
+      AttributeDefinitions:
+        - AttributeName: dateKey
+          AttributeType: S
+        - AttributeName: matchId
+          AttributeType: S
+      KeySchema:
+        - AttributeName: dateKey
+          KeyType: HASH
+        - AttributeName: matchId
+          KeyType: RANGE
+      TimeToLiveSpecification:
+        AttributeName: ttl
+        Enabled: true
+
+  # Dashboard API (HTTP API)
+  DashboardAPI:
+    Type: AWS::ApiGatewayV2::Api
+    Properties:
+      Name: PenguinBattleDashboard
+      ProtocolType: HTTP
+      CorsConfiguration:
+        AllowOrigins:
+          - "*"
+        AllowMethods:
+          - GET
+        AllowHeaders:
+          - "*"
+
+  DashboardAPIStage:
+    Type: AWS::ApiGatewayV2::Stage
+    Properties:
+      ApiId: !Ref DashboardAPI
+      StageName: $default
+      AutoDeploy: true
+
+  DashboardLambdaRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: PenguinBattleDashboardRole
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: lambda.amazonaws.com
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole
+      Policies:
+        - PolicyName: DashboardReadOnly
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - dynamodb:GetItem
+                  - dynamodb:Scan
+                  - dynamodb:Query
+                Resource:
+                  - !GetAtt RoomsTable.Arn
+                  - !Sub "${RoomsTable.Arn}/index/*"
+                  - !GetAtt ThrottleTable.Arn
+                  - !GetAtt GameLogTable.Arn
+                  - !Sub "${GameLogTable.Arn}/index/*"
+
+  DashboardFunction:
+    Type: AWS::Lambda::Function
+    Properties:
+      FunctionName: PenguinBattle-Dashboard
+      Runtime: nodejs20.x
+      Handler: src/dashboard.handler
+      Timeout: 30
+      MemorySize: 256
+      ReservedConcurrentExecutions: 3
+      Role: !GetAtt DashboardLambdaRole.Arn
+      Code:
+        S3Bucket: !Ref CodeBucket
+        S3Key: !Ref CodeKey
+      Environment:
+        Variables:
+          TABLE_NAME: !Ref RoomsTable
+          THROTTLE_TABLE: !Ref ThrottleTable
+          GAMELOG_TABLE: !Ref GameLogTable
+          ADMIN_IPS: !Ref AdminIPs
+
+  DashboardIntegration:
+    Type: AWS::ApiGatewayV2::Integration
+    Properties:
+      ApiId: !Ref DashboardAPI
+      IntegrationType: AWS_PROXY
+      IntegrationUri: !GetAtt DashboardFunction.Arn
+      PayloadFormatVersion: "2.0"
+
+  DashboardRoute:
+    Type: AWS::ApiGatewayV2::Route
+    Properties:
+      ApiId: !Ref DashboardAPI
+      RouteKey: "GET /stats/{proxy+}"
+      Target: !Sub "integrations/${DashboardIntegration}"
+
+  DashboardPermission:
+    Type: AWS::Lambda::Permission
+    Properties:
+      Action: lambda:InvokeFunction
+      FunctionName: !Ref DashboardFunction
+      Principal: apigateway.amazonaws.com
+      SourceArn: !Sub "arn:aws:execute-api:${AWS::Region}:${AWS::AccountId}:${DashboardAPI}/*"
+
 Outputs:
   WebSocketURL:
     Description: WebSocket API URL
@@ -328,3 +449,6 @@ Outputs:
   ApiGatewayDomain:
     Description: API Gateway domain for CloudFront origin
     Value: !Sub "${PenguinBattleWS}.execute-api.${AWS::Region}.amazonaws.com"
+  DashboardAPIURL:
+    Description: Dashboard API URL
+    Value: !Sub "https://${DashboardAPI}.execute-api.${AWS::Region}.amazonaws.com"
