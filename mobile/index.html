@@ -1,0 +1,927 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+<title>Penguin Battle! - Mobile</title>
+<style>
+* { margin: 0; padding: 0; box-sizing: border-box; }
+body {
+  background: #1a1a2e;
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  flex-direction: column;
+  height: 100vh;
+  height: 100dvh;
+  font-family: 'Segoe UI', sans-serif;
+  overflow: hidden;
+  touch-action: none;
+  -webkit-touch-callout: none;
+  -webkit-user-select: none;
+  user-select: none;
+}
+canvas {
+  border: 3px solid #4a90d9;
+  border-radius: 8px;
+  box-shadow: 0 0 30px rgba(74, 144, 217, 0.3);
+}
+#mobile-controls {
+  display: flex;
+  position: fixed;
+  bottom: 0;
+  left: 0;
+  right: 0;
+  height: 160px;
+  justify-content: space-between;
+  align-items: flex-end;
+  padding: 0 10px 15px;
+  pointer-events: none;
+  z-index: 10;
+}
+.dpad {
+  pointer-events: auto;
+  position: relative;
+  width: 140px;
+  height: 140px;
+}
+.dpad-btn {
+  position: absolute;
+  width: 48px;
+  height: 48px;
+  background: rgba(255,255,255,0.15);
+  border: 2px solid rgba(255,255,255,0.3);
+  border-radius: 12px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 22px;
+  color: rgba(255,255,255,0.7);
+  touch-action: none;
+  -webkit-tap-highlight-color: transparent;
+}
+.dpad-btn.pressed {
+  background: rgba(255,255,255,0.35);
+  border-color: rgba(255,255,255,0.6);
+}
+.dpad-up    { left: 46px; top: 0; }
+.dpad-left  { left: 0;    top: 46px; }
+.dpad-right { left: 92px; top: 46px; }
+.attack-buttons {
+  pointer-events: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  align-items: flex-end;
+}
+.atk-btn {
+  width: 72px;
+  height: 44px;
+  border-radius: 12px;
+  border: 2px solid;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 12px;
+  font-weight: bold;
+  color: #fff;
+  touch-action: none;
+  -webkit-tap-highlight-color: transparent;
+}
+.atk-btn.pressed {
+  filter: brightness(1.4);
+  transform: scale(0.95);
+}
+.atk-slap  { background: rgba(74,144,217,0.4);  border-color: rgba(74,144,217,0.7); }
+.atk-slide { background: rgba(244,166,35,0.4);   border-color: rgba(244,166,35,0.7); }
+.atk-flop  { background: rgba(217,74,74,0.4);    border-color: rgba(217,74,74,0.7); }
+</style>
+</head>
+<body>
+<canvas id="game" width="800" height="500"></canvas>
+<div id="mobile-controls">
+  <div class="dpad">
+    <div class="dpad-btn dpad-up" data-dir="up">&#9650;</div>
+    <div class="dpad-btn dpad-left" data-dir="left">&#9664;</div>
+    <div class="dpad-btn dpad-right" data-dir="right">&#9654;</div>
+  </div>
+  <div class="attack-buttons">
+    <div class="atk-btn atk-slap" data-atk="0">SLAP</div>
+    <div class="atk-btn atk-slide" data-atk="1">SLIDE</div>
+    <div class="atk-btn atk-flop" data-atk="2">FLOP</div>
+  </div>
+</div>
+<script>
+const canvas = document.getElementById('game');
+const ctx = canvas.getContext('2d');
+
+// Game State
+const STATE = { TITLE: 0, BATTLE: 1, WIN: 2, LOSE: 3 };
+let gameState = STATE.TITLE;
+let shakeTimer = 0;
+let shakeIntensity = 0;
+let particles = [];
+let damageTexts = [];
+let battleStartTimer = 0;
+
+// Keys (for keyboard fallback)
+const keys = {};
+window.addEventListener('keydown', e => { keys[e.key] = true; e.preventDefault(); });
+window.addEventListener('keyup', e => { keys[e.key] = false; });
+
+// Touch state
+const touchState = { left: false, right: false, up: false, atk: -1 };
+
+// Canvas scaling
+function resizeCanvas() {
+  const w = window.innerWidth;
+  const h = window.innerHeight;
+  const controlsH = 160;
+  const availH = h - controlsH;
+  const scale = Math.min(w / 800, availH / 500);
+  canvas.style.width = (800 * scale) + 'px';
+  canvas.style.height = (500 * scale) + 'px';
+}
+resizeCanvas();
+window.addEventListener('resize', resizeCanvas);
+
+// D-pad touch handling
+document.querySelectorAll('.dpad-btn').forEach(btn => {
+  const dir = btn.dataset.dir;
+  const onDown = (e) => { e.preventDefault(); touchState[dir] = true; btn.classList.add('pressed'); };
+  const onUp = (e) => { e.preventDefault(); touchState[dir] = false; btn.classList.remove('pressed'); };
+  btn.addEventListener('touchstart', onDown, { passive: false });
+  btn.addEventListener('touchend', onUp, { passive: false });
+  btn.addEventListener('touchcancel', onUp, { passive: false });
+});
+
+// Attack button touch handling
+document.querySelectorAll('.atk-btn').forEach(btn => {
+  const atk = parseInt(btn.dataset.atk);
+  btn.addEventListener('touchstart', (e) => {
+    e.preventDefault();
+    touchState.atk = atk;
+    btn.classList.add('pressed');
+  }, { passive: false });
+  btn.addEventListener('touchend', (e) => {
+    e.preventDefault();
+    touchState.atk = -1;
+    btn.classList.remove('pressed');
+  }, { passive: false });
+  btn.addEventListener('touchcancel', (e) => {
+    e.preventDefault();
+    touchState.atk = -1;
+    btn.classList.remove('pressed');
+  }, { passive: false });
+});
+
+// Tap on canvas for start/retry
+canvas.addEventListener('touchstart', (e) => {
+  e.preventDefault();
+  if (gameState === STATE.TITLE || gameState === STATE.WIN || gameState === STATE.LOSE) {
+    keys[' '] = true;
+    setTimeout(() => { keys[' '] = false; }, 100);
+  }
+}, { passive: false });
+
+// Penguin class
+class Penguin {
+  constructor(x, y, isPlayer) {
+    this.x = x;
+    this.y = y;
+    this.baseY = y;
+    this.vx = 0;
+    this.vy = 0;
+    this.width = 40;
+    this.height = 50;
+    this.isPlayer = isPlayer;
+    this.facing = isPlayer ? 1 : -1;
+    this.hp = 100;
+    this.maxHp = 100;
+    this.attackTimer = 0;
+    this.attackCooldown = 0;
+    this.isAttacking = false;
+    this.attackType = 0; // 0=punch, 1=slide, 2=belly
+    this.hitTimer = 0;
+    this.grounded = false;
+    this.animTimer = 0;
+    this.slideTimer = 0;
+    this.invincible = 0;
+    this.comboCount = 0;
+    this.lastHitTime = 0;
+    // NPC AI
+    this.aiTimer = 0;
+    this.aiAction = 'idle';
+    this.aiTargetX = 0;
+    this.specialCooldown = 0;
+  }
+
+  update(other) {
+    this.animTimer += 0.1;
+    if (this.attackCooldown > 0) this.attackCooldown--;
+    if (this.invincible > 0) this.invincible--;
+    if (this.hitTimer > 0) this.hitTimer--;
+    if (this.slideTimer > 0) this.slideTimer--;
+    if (this.specialCooldown > 0) this.specialCooldown--;
+
+    // Gravity
+    this.vy += 0.6;
+    this.y += this.vy;
+    this.x += this.vx;
+
+    // Ground
+    const ground = 400;
+    if (this.y >= ground) {
+      this.y = ground;
+      this.vy = 0;
+      this.grounded = true;
+    } else {
+      this.grounded = false;
+    }
+
+    // Friction
+    if (this.slideTimer <= 0) {
+      this.vx *= 0.85;
+    } else {
+      this.vx *= 0.97;
+    }
+
+    // Walls
+    if (this.x < 30) this.x = 30;
+    if (this.x > 770) this.x = 770;
+
+    // Face opponent
+    if (!this.isAttacking || this.attackType !== 1) {
+      this.facing = other.x > this.x ? 1 : -1;
+    }
+
+    // Attack animation
+    if (this.isAttacking) {
+      this.attackTimer--;
+      if (this.attackTimer <= 0) {
+        this.isAttacking = false;
+      }
+    }
+
+    // AI control
+    if (!this.isPlayer) {
+      this.updateAI(other);
+    }
+  }
+
+  updateAI(player) {
+    this.aiTimer--;
+    const dist = Math.abs(this.x - player.x);
+
+    if (this.aiTimer <= 0) {
+      this.aiTimer = 20 + Math.random() * 30;
+
+      if (dist > 200) {
+        this.aiAction = 'approach';
+      } else if (dist < 60) {
+        if (Math.random() < 0.5) {
+          this.aiAction = 'attack';
+        } else {
+          this.aiAction = 'retreat';
+        }
+      } else if (dist < 150) {
+        const r = Math.random();
+        if (r < 0.35) this.aiAction = 'attack';
+        else if (r < 0.55) this.aiAction = 'slide';
+        else if (r < 0.7) this.aiAction = 'jump_attack';
+        else this.aiAction = 'approach';
+      } else {
+        this.aiAction = Math.random() < 0.5 ? 'approach' : 'idle';
+      }
+    }
+
+    switch (this.aiAction) {
+      case 'approach':
+        this.vx += this.facing * 0.8;
+        break;
+      case 'retreat':
+        this.vx -= this.facing * 1.0;
+        if (this.grounded && Math.random() < 0.1) this.vy = -10;
+        break;
+      case 'attack':
+        if (dist < 70 && this.attackCooldown <= 0) {
+          this.attack(0);
+          this.aiAction = 'idle';
+        } else {
+          this.vx += this.facing * 0.5;
+        }
+        break;
+      case 'slide':
+        if (this.attackCooldown <= 0 && this.grounded) {
+          this.attack(1);
+          this.aiAction = 'idle';
+        }
+        break;
+      case 'jump_attack':
+        if (this.grounded) this.vy = -11;
+        if (dist < 80 && this.attackCooldown <= 0) {
+          this.attack(2);
+          this.aiAction = 'idle';
+        }
+        break;
+    }
+
+    // Clamp speed
+    if (Math.abs(this.vx) > 4) this.vx = 4 * Math.sign(this.vx);
+  }
+
+  attack(type) {
+    if (this.attackCooldown > 0 || this.isAttacking) return;
+    this.isAttacking = true;
+    this.attackType = type;
+    switch (type) {
+      case 0: // Punch (flipper slap)
+        this.attackTimer = 12;
+        this.attackCooldown = 20;
+        break;
+      case 1: // Slide
+        this.attackTimer = 20;
+        this.attackCooldown = 35;
+        this.vx = this.facing * 8;
+        this.slideTimer = 20;
+        break;
+      case 2: // Belly flop
+        this.attackTimer = 15;
+        this.attackCooldown = 30;
+        this.vy = 6;
+        this.vx = this.facing * 3;
+        break;
+    }
+  }
+
+  getAttackBox() {
+    if (!this.isAttacking) return null;
+    switch (this.attackType) {
+      case 0: // Punch
+        return {
+          x: this.x + this.facing * 25,
+          y: this.y - 15,
+          w: 30,
+          h: 20,
+          damage: 8 + Math.random() * 5
+        };
+      case 1: // Slide
+        return {
+          x: this.x + this.facing * 10,
+          y: this.y + 10,
+          w: 45,
+          h: 20,
+          damage: 12 + Math.random() * 6
+        };
+      case 2: // Belly flop
+        return {
+          x: this.x - 15,
+          y: this.y,
+          w: 30,
+          h: 30,
+          damage: 15 + Math.random() * 8
+        };
+    }
+  }
+
+  takeDamage(dmg, fromX) {
+    if (this.invincible > 0) return;
+    this.hp -= dmg;
+    if (this.hp < 0) this.hp = 0;
+    this.hitTimer = 10;
+    this.invincible = 15;
+    this.vx = (this.x > fromX ? 1 : -1) * 5;
+    this.vy = -4;
+
+    shakeTimer = 8;
+    shakeIntensity = dmg * 0.4;
+
+    // Particles
+    for (let i = 0; i < 8; i++) {
+      particles.push({
+        x: this.x, y: this.y - 20,
+        vx: (Math.random() - 0.5) * 8,
+        vy: (Math.random() - 1) * 6,
+        life: 20 + Math.random() * 15,
+        color: this.isPlayer ? '#6ec6ff' : '#ff6e6e',
+        size: 3 + Math.random() * 4
+      });
+    }
+
+    // Damage text
+    damageTexts.push({
+      x: this.x, y: this.y - 40,
+      text: Math.floor(dmg).toString(),
+      life: 40,
+      vy: -2,
+      color: '#ffdd44'
+    });
+  }
+
+  draw() {
+    const px = this.x;
+    const py = this.y;
+    const f = this.facing;
+
+    ctx.save();
+    ctx.translate(px, py);
+
+    // Flash when hit
+    if (this.hitTimer > 0 && this.hitTimer % 4 < 2) {
+      ctx.globalAlpha = 0.5;
+    }
+    if (this.invincible > 0 && this.invincible % 6 < 3) {
+      ctx.globalAlpha = 0.7;
+    }
+
+    // Slide pose
+    if (this.slideTimer > 0) {
+      ctx.rotate(f * 0.3);
+    }
+
+    // Wobble
+    const wobble = Math.sin(this.animTimer * 2) * 2;
+
+    // Body (black)
+    ctx.fillStyle = this.isPlayer ? '#2d2d3d' : '#3d2d2d';
+    ctx.beginPath();
+    ctx.ellipse(0, -22 + wobble, 18, 25, 0, 0, Math.PI * 2);
+    ctx.fill();
+
+    // Belly (white)
+    ctx.fillStyle = '#f0f0f0';
+    ctx.beginPath();
+    ctx.ellipse(0, -18 + wobble, 11, 18, 0, 0, Math.PI * 2);
+    ctx.fill();
+
+    // Eyes
+    const eyeY = -32 + wobble;
+    ctx.fillStyle = '#fff';
+    ctx.beginPath();
+    ctx.ellipse(f * 5 - 3, eyeY, 5, 6, 0, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.beginPath();
+    ctx.ellipse(f * 5 + 5, eyeY, 5, 6, 0, 0, Math.PI * 2);
+    ctx.fill();
+    // Pupils
+    ctx.fillStyle = '#111';
+    ctx.beginPath();
+    ctx.ellipse(f * 5 - 3 + f * 2, eyeY, 2.5, 3, 0, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.beginPath();
+    ctx.ellipse(f * 5 + 5 + f * 2, eyeY, 2.5, 3, 0, 0, Math.PI * 2);
+    ctx.fill();
+
+    // Beak
+    ctx.fillStyle = '#f4a623';
+    ctx.beginPath();
+    ctx.moveTo(f * 12, -28 + wobble);
+    ctx.lineTo(f * 22, -25 + wobble);
+    ctx.lineTo(f * 12, -22 + wobble);
+    ctx.closePath();
+    ctx.fill();
+
+    // Flippers
+    const flapAngle = this.isAttacking && this.attackType === 0
+      ? f * -1.2 : Math.sin(this.animTimer * 3) * 0.2;
+    ctx.save();
+    ctx.translate(-14, -25 + wobble);
+    ctx.rotate(flapAngle - 0.3);
+    ctx.fillStyle = this.isPlayer ? '#2d2d3d' : '#3d2d2d';
+    ctx.beginPath();
+    ctx.ellipse(0, 10, 5, 14, -0.2, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.restore();
+
+    ctx.save();
+    ctx.translate(14, -25 + wobble);
+    ctx.rotate(-flapAngle + 0.3);
+    ctx.fillStyle = this.isPlayer ? '#2d2d3d' : '#3d2d2d';
+    ctx.beginPath();
+    ctx.ellipse(0, 10, 5, 14, 0.2, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.restore();
+
+    // Feet
+    ctx.fillStyle = '#f4a623';
+    ctx.beginPath();
+    ctx.ellipse(-8, 2, 8, 4, -0.2, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.beginPath();
+    ctx.ellipse(8, 2, 8, 4, 0.2, 0, Math.PI * 2);
+    ctx.fill();
+
+    // Player indicator
+    if (this.isPlayer) {
+      ctx.fillStyle = '#4a90d9';
+      ctx.font = 'bold 12px sans-serif';
+      ctx.textAlign = 'center';
+      ctx.fillText('YOU', 0, -55);
+      // Arrow
+      ctx.beginPath();
+      ctx.moveTo(0, -50);
+      ctx.lineTo(-5, -45);
+      ctx.lineTo(5, -45);
+      ctx.closePath();
+      ctx.fill();
+    } else {
+      ctx.fillStyle = '#d94a4a';
+      ctx.font = 'bold 12px sans-serif';
+      ctx.textAlign = 'center';
+      ctx.fillText('NPC', 0, -55);
+    }
+
+    // Attack effects
+    if (this.isAttacking) {
+      ctx.globalAlpha = 0.6;
+      if (this.attackType === 0) {
+        // Slap effect
+        ctx.strokeStyle = '#fff';
+        ctx.lineWidth = 3;
+        for (let i = 0; i < 3; i++) {
+          const angle = f * (-0.5 + i * 0.3);
+          ctx.beginPath();
+          ctx.moveTo(f * 20, -25);
+          ctx.lineTo(f * 20 + Math.cos(angle) * 20, -25 + Math.sin(angle) * 20);
+          ctx.stroke();
+        }
+      } else if (this.attackType === 1) {
+        // Slide sparks
+        ctx.fillStyle = '#fff';
+        for (let i = 0; i < 5; i++) {
+          ctx.beginPath();
+          ctx.arc(-f * 15 + Math.random() * 10, 5 + Math.random() * 5, 2, 0, Math.PI * 2);
+          ctx.fill();
+        }
+      } else if (this.attackType === 2) {
+        // Belly flop shockwave
+        ctx.strokeStyle = '#ffdd44';
+        ctx.lineWidth = 2;
+        const r = (15 - this.attackTimer) * 3;
+        ctx.beginPath();
+        ctx.arc(0, 5, r, 0, Math.PI * 2);
+        ctx.stroke();
+      }
+    }
+
+    ctx.restore();
+  }
+}
+
+// Player & NPC
+let player, npc;
+
+function resetBattle() {
+  player = new Penguin(200, 400, true);
+  npc = new Penguin(600, 400, false);
+  particles = [];
+  damageTexts = [];
+  battleStartTimer = 90;
+}
+
+resetBattle();
+
+// Draw HP bar
+function drawHPBar(x, y, w, h, hp, maxHp, color, label) {
+  const ratio = hp / maxHp;
+  // Background
+  ctx.fillStyle = '#333';
+  ctx.fillRect(x, y, w, h);
+  // HP
+  const barColor = ratio > 0.5 ? color : ratio > 0.25 ? '#f4a623' : '#d94a4a';
+  ctx.fillStyle = barColor;
+  ctx.fillRect(x, y, w * ratio, h);
+  // Border
+  ctx.strokeStyle = '#fff';
+  ctx.lineWidth = 2;
+  ctx.strokeRect(x, y, w, h);
+  // Label
+  ctx.fillStyle = '#fff';
+  ctx.font = 'bold 14px sans-serif';
+  ctx.textAlign = 'left';
+  ctx.fillText(label, x, y - 5);
+  // HP text
+  ctx.textAlign = 'center';
+  ctx.fillText(`${Math.ceil(hp)} / ${maxHp}`, x + w / 2, y + h - 4);
+}
+
+// Draw ground
+function drawBackground() {
+  // Sky gradient
+  const grad = ctx.createLinearGradient(0, 0, 0, 500);
+  grad.addColorStop(0, '#0f1b33');
+  grad.addColorStop(0.6, '#1a3a5c');
+  grad.addColorStop(1, '#2a5a8c');
+  ctx.fillStyle = grad;
+  ctx.fillRect(0, 0, 800, 500);
+
+  // Stars
+  ctx.fillStyle = '#fff';
+  for (let i = 0; i < 30; i++) {
+    const sx = (i * 137 + 50) % 800;
+    const sy = (i * 97 + 20) % 250;
+    const ss = 1 + (i % 3);
+    ctx.globalAlpha = 0.3 + Math.sin(Date.now() * 0.002 + i) * 0.3;
+    ctx.beginPath();
+    ctx.arc(sx, sy, ss, 0, Math.PI * 2);
+    ctx.fill();
+  }
+  ctx.globalAlpha = 1;
+
+  // Snow ground
+  const snowGrad = ctx.createLinearGradient(0, 400, 0, 500);
+  snowGrad.addColorStop(0, '#e8f0ff');
+  snowGrad.addColorStop(1, '#b8d0f0');
+  ctx.fillStyle = snowGrad;
+  ctx.beginPath();
+  ctx.moveTo(0, 410);
+  for (let x = 0; x <= 800; x += 20) {
+    ctx.lineTo(x, 405 + Math.sin(x * 0.03) * 5);
+  }
+  ctx.lineTo(800, 500);
+  ctx.lineTo(0, 500);
+  ctx.closePath();
+  ctx.fill();
+
+  // Ice blocks in background
+  ctx.fillStyle = 'rgba(180, 220, 255, 0.3)';
+  ctx.fillRect(50, 360, 40, 45);
+  ctx.fillRect(710, 365, 35, 40);
+  ctx.fillStyle = 'rgba(160, 210, 255, 0.2)';
+  ctx.fillRect(380, 370, 50, 35);
+}
+
+// Particles update
+function updateParticles() {
+  for (let i = particles.length - 1; i >= 0; i--) {
+    const p = particles[i];
+    p.x += p.vx;
+    p.y += p.vy;
+    p.vy += 0.2;
+    p.life--;
+    if (p.life <= 0) {
+      particles.splice(i, 1);
+      continue;
+    }
+    ctx.globalAlpha = p.life / 30;
+    ctx.fillStyle = p.color;
+    ctx.beginPath();
+    ctx.arc(p.x, p.y, p.size, 0, Math.PI * 2);
+    ctx.fill();
+  }
+  ctx.globalAlpha = 1;
+}
+
+// Damage texts update
+function updateDamageTexts() {
+  for (let i = damageTexts.length - 1; i >= 0; i--) {
+    const dt = damageTexts[i];
+    dt.y += dt.vy;
+    dt.life--;
+    if (dt.life <= 0) {
+      damageTexts.splice(i, 1);
+      continue;
+    }
+    ctx.globalAlpha = dt.life / 40;
+    ctx.fillStyle = dt.color;
+    ctx.font = 'bold 20px sans-serif';
+    ctx.textAlign = 'center';
+    ctx.fillText(dt.text, dt.x, dt.y);
+  }
+  ctx.globalAlpha = 1;
+}
+
+// Collision check
+function boxCollide(a, b) {
+  return a.x - a.w / 2 < b.x + b.width / 2 &&
+         a.x + a.w / 2 > b.x - b.width / 2 &&
+         a.y - a.h / 2 < b.y &&
+         a.y + a.h / 2 > b.y - b.height;
+}
+
+// Input handling
+function handleInput() {
+  if (player.hitTimer > 0) return;
+
+  // Movement (keyboard + touch)
+  if (keys['ArrowLeft'] || keys['a'] || touchState.left) {
+    player.vx -= 1.0;
+  }
+  if (keys['ArrowRight'] || keys['d'] || touchState.right) {
+    player.vx += 1.0;
+  }
+  // Jump
+  if ((keys['ArrowUp'] || keys['w'] || touchState.up) && player.grounded) {
+    player.vy = -12;
+  }
+  // Attacks (keyboard)
+  if (keys['z'] || keys['j']) {
+    player.attack(0);
+  }
+  if (keys['x'] || keys['k']) {
+    player.attack(1);
+  }
+  if (keys['c'] || keys['l']) {
+    player.attack(2);
+  }
+  // Attacks (touch)
+  if (touchState.atk >= 0) {
+    player.attack(touchState.atk);
+  }
+
+  // Clamp speed
+  if (Math.abs(player.vx) > 5) player.vx = 5 * Math.sign(player.vx);
+}
+
+// Check attack hits
+function checkAttacks(attacker, defender) {
+  const atkBox = attacker.getAttackBox();
+  if (!atkBox) return;
+  if (attacker.attackTimer !== (attacker.attackType === 1 ? 15 : attacker.attackType === 2 ? 10 : 8)) return;
+
+  const hit = Math.abs(atkBox.x - defender.x) < atkBox.w &&
+              Math.abs(atkBox.y - (defender.y - 20)) < atkBox.h + 15;
+  if (hit) {
+    defender.takeDamage(atkBox.damage, attacker.x);
+  }
+}
+
+// Main loop
+function gameLoop() {
+  ctx.save();
+
+  // Screen shake
+  if (shakeTimer > 0) {
+    shakeTimer--;
+    const sx = (Math.random() - 0.5) * shakeIntensity;
+    const sy = (Math.random() - 0.5) * shakeIntensity;
+    ctx.translate(sx, sy);
+    shakeIntensity *= 0.85;
+  }
+
+  drawBackground();
+
+  switch (gameState) {
+    case STATE.TITLE:
+      drawTitle();
+      break;
+    case STATE.BATTLE:
+      updateBattle();
+      break;
+    case STATE.WIN:
+    case STATE.LOSE:
+      drawResult();
+      break;
+  }
+
+  ctx.restore();
+  requestAnimationFrame(gameLoop);
+}
+
+function drawTitle() {
+  // Title
+  ctx.fillStyle = '#fff';
+  ctx.font = 'bold 48px sans-serif';
+  ctx.textAlign = 'center';
+  ctx.fillText('PENGUIN BATTLE!', 400, 150);
+
+  // Subtitle
+  ctx.font = '18px sans-serif';
+  ctx.fillStyle = '#aaccff';
+  ctx.fillText('- Penguin vs Penguin -', 400, 185);
+
+  // Penguins on title
+  player.animTimer += 0.05;
+  npc.animTimer += 0.05;
+  player.draw();
+  npc.draw();
+
+  // Controls
+  ctx.fillStyle = '#ddd';
+  ctx.font = '16px sans-serif';
+  ctx.fillText('D-pad : Move & Jump', 400, 280);
+  ctx.fillText('SLAP / SLIDE / FLOP : Attack', 400, 310);
+
+  ctx.font = 'bold 22px sans-serif';
+  ctx.fillStyle = '#ffdd44';
+  const blink = Math.sin(Date.now() * 0.005) > 0;
+  if (blink) {
+    ctx.fillText('Tap to Start!', 400, 420);
+  }
+
+  if (keys[' '] || keys['Enter']) {
+    gameState = STATE.BATTLE;
+    resetBattle();
+  }
+}
+
+function updateBattle() {
+  if (battleStartTimer > 0) {
+    battleStartTimer--;
+    player.draw();
+    npc.draw();
+    drawHPBar(30, 25, 250, 22, player.hp, player.maxHp, '#4a90d9', 'YOU');
+    drawHPBar(520, 25, 250, 22, npc.hp, npc.maxHp, '#d94a4a', 'NPC');
+
+    ctx.fillStyle = '#fff';
+    ctx.font = 'bold 60px sans-serif';
+    ctx.textAlign = 'center';
+    if (battleStartTimer > 60) {
+      ctx.fillText('3', 400, 250);
+    } else if (battleStartTimer > 30) {
+      ctx.fillText('2', 400, 250);
+    } else {
+      ctx.fillText('1', 400, 250);
+    }
+    return;
+  }
+
+  handleInput();
+  player.update(npc);
+  npc.update(player);
+
+  checkAttacks(player, npc);
+  checkAttacks(npc, player);
+
+  // Draw
+  player.draw();
+  npc.draw();
+  updateParticles();
+  updateDamageTexts();
+
+  // HP bars
+  drawHPBar(30, 25, 250, 22, player.hp, player.maxHp, '#4a90d9', 'YOU');
+  drawHPBar(520, 25, 250, 22, npc.hp, npc.maxHp, '#d94a4a', 'NPC');
+
+  // Check win/lose
+  if (npc.hp <= 0) {
+    gameState = STATE.WIN;
+    spawnConfetti();
+  }
+  if (player.hp <= 0) {
+    gameState = STATE.LOSE;
+  }
+}
+
+function spawnConfetti() {
+  for (let i = 0; i < 50; i++) {
+    particles.push({
+      x: 400 + (Math.random() - 0.5) * 300,
+      y: 200,
+      vx: (Math.random() - 0.5) * 10,
+      vy: -Math.random() * 8 - 3,
+      life: 60 + Math.random() * 40,
+      color: ['#ff6b6b', '#4ecdc4', '#ffe66d', '#a8e6cf', '#ff8a80', '#80d8ff'][Math.floor(Math.random() * 6)],
+      size: 3 + Math.random() * 5
+    });
+  }
+}
+
+function drawResult() {
+  player.draw();
+  npc.draw();
+  updateParticles();
+  updateDamageTexts();
+
+  drawHPBar(30, 25, 250, 22, player.hp, player.maxHp, '#4a90d9', 'YOU');
+  drawHPBar(520, 25, 250, 22, npc.hp, npc.maxHp, '#d94a4a', 'NPC');
+
+  // Overlay
+  ctx.fillStyle = 'rgba(0, 0, 0, 0.5)';
+  ctx.fillRect(0, 150, 800, 200);
+
+  ctx.font = 'bold 50px sans-serif';
+  ctx.textAlign = 'center';
+
+  if (gameState === STATE.WIN) {
+    ctx.fillStyle = '#4ecdc4';
+    ctx.fillText('YOU WIN!', 400, 240);
+    ctx.font = '20px sans-serif';
+    ctx.fillStyle = '#fff';
+    ctx.fillText('Your penguin is victorious!', 400, 280);
+  } else {
+    ctx.fillStyle = '#ff6b6b';
+    ctx.fillText('YOU LOSE...', 400, 240);
+    ctx.font = '20px sans-serif';
+    ctx.fillStyle = '#fff';
+    ctx.fillText('The NPC penguin was stronger this time...', 400, 280);
+  }
+
+  ctx.font = 'bold 18px sans-serif';
+  ctx.fillStyle = '#ffdd44';
+  const blink = Math.sin(Date.now() * 0.005) > 0;
+  if (blink) {
+    ctx.fillText('Tap to Retry!', 400, 330);
+  }
+
+  if (keys[' '] || keys['Enter']) {
+    gameState = STATE.BATTLE;
+    resetBattle();
+  }
+}
+
+// Start
+gameLoop();
+</script>
+</body>
+</html>
