@@ -62,9 +62,9 @@ exports.handler = async (event) => {
   switch (body.action) {
 
     case 'join': {
-      const roomCode = String(body.room || '').trim();
-      if (!/^\d{4}$/.test(roomCode)) {
-        await sendTo(api, connectionId, { type: 'error', code: 'INVALID_ROOM', message: '4桁の数字を入力してください' });
+      const roomCode = String(body.room || '').trim().toUpperCase();
+      if (!/^[A-Z0-9]{6}$/.test(roomCode)) {
+        await sendTo(api, connectionId, { type: 'error', code: 'INVALID_ROOM', message: '6文字の英数字を入力してください' });
         return { statusCode: 200, body: 'OK' };
       }
 
@@ -137,7 +137,6 @@ exports.handler = async (event) => {
           Item: {
             roomCode,
             p1ConnectionId: connectionId,
-            p2ConnectionId: '',
             creatorIp: sourceIp,
             status: 'waiting',
             seed: 0,
@@ -155,6 +154,7 @@ exports.handler = async (event) => {
       const roomCode = String(body.room || '');
       const room = (await ddb.send(new GetCommand({ TableName: TABLE, Key: { roomCode } }))).Item;
       if (!room || room.status !== 'playing') break;
+      if (room.p1ConnectionId !== connectionId && room.p2ConnectionId !== connectionId) break;
 
       const opponentCid = room.p1ConnectionId === connectionId
         ? room.p2ConnectionId
@@ -187,6 +187,7 @@ exports.handler = async (event) => {
       const roomCode = String(body.room || '');
       const room = (await ddb.send(new GetCommand({ TableName: TABLE, Key: { roomCode } }))).Item;
       if (!room || room.status !== 'playing') break;
+      if (room.p1ConnectionId !== connectionId && room.p2ConnectionId !== connectionId) break;
 
       const countered = !!body.countered;
       const newHitCount = (room.hitCount || 0) + 1;
@@ -218,6 +219,7 @@ exports.handler = async (event) => {
 
       // Only process if room is still in 'playing' state (prevents double-end race)
       if (room.status !== 'playing') break;
+      if (room.p1ConnectionId !== connectionId && room.p2ConnectionId !== connectionId) break;
 
       const winner = body.winner || 'unknown';
       const endMsg = { type: 'end', winner };
@@ -232,12 +234,11 @@ exports.handler = async (event) => {
         await ddb.send(new UpdateCommand({
           TableName: TABLE,
           Key: { roomCode },
-          UpdateExpression: 'SET #s = :waiting, p1ConnectionId = :empty, p2ConnectionId = :empty, seed = :zero, hitCount = :zero, #t = :ttl',
+          UpdateExpression: 'SET #s = :waiting, seed = :zero, hitCount = :zero, #t = :ttl REMOVE p1ConnectionId, p2ConnectionId',
           ExpressionAttributeNames: { '#s': 'status', '#t': 'ttl' },
           ConditionExpression: '#s = :playing',
           ExpressionAttributeValues: {
             ':waiting': 'waiting',
-            ':empty': '',
             ':zero': 0,
             ':ttl': Math.floor(Date.now() / 1000) + 300,
             ':playing': 'playing',

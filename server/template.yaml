@@ -59,7 +59,9 @@ Resources:
       ApiId: !Ref PenguinBattleWS
       StageName: prod
       AutoDeploy: true
-      DefaultRouteSettings: {}
+      DefaultRouteSettings:
+        ThrottlingBurstLimit: 500
+        ThrottlingRateLimit: 300
 
   # Connect
   ConnectFunction:
@@ -197,6 +199,10 @@ Resources:
           AttributeType: S
         - AttributeName: creatorIp
           AttributeType: S
+        - AttributeName: p1ConnectionId
+          AttributeType: S
+        - AttributeName: p2ConnectionId
+          AttributeType: S
       KeySchema:
         - AttributeName: roomCode
           KeyType: HASH
@@ -204,6 +210,18 @@ Resources:
         - IndexName: IpIndex
           KeySchema:
             - AttributeName: creatorIp
+              KeyType: HASH
+          Projection:
+            ProjectionType: KEYS_ONLY
+        - IndexName: P1ConnectionIndex
+          KeySchema:
+            - AttributeName: p1ConnectionId
+              KeyType: HASH
+          Projection:
+            ProjectionType: KEYS_ONLY
+        - IndexName: P2ConnectionIndex
+          KeySchema:
+            - AttributeName: p2ConnectionId
               KeyType: HASH
           Projection:
             ProjectionType: KEYS_ONLY

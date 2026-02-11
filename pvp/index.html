@@ -53,7 +53,7 @@ canvas {
   margin-bottom: 20px;
 }
 #lobby input {
-  width: 160px;
+  width: 200px;
   padding: 14px;
   font-size: 28px;
   text-align: center;
@@ -61,7 +61,7 @@ canvas {
   border: 2px solid #4a90d9;
   background: #1a2a4e;
   color: #fff;
-  letter-spacing: 12px;
+  letter-spacing: 8px;
   font-family: 'Courier New', monospace;
   outline: none;
   touch-action: auto;
@@ -92,6 +92,27 @@ canvas {
   background: #334;
   color: #667;
   cursor: not-allowed;
+}
+#create-btn {
+  background: #2ecc71;
+  color: #fff;
+}
+#create-btn:active { background: #27ae60; }
+#create-btn:disabled {
+  background: #334;
+  color: #667;
+  cursor: not-allowed;
+}
+.lobby-btns {
+  display: flex;
+  gap: 10px;
+}
+.lobby-guide {
+  color: #99aabb;
+  font-size: 12px;
+  text-align: center;
+  max-width: 320px;
+  line-height: 1.6;
 }
 #lobby .status-msg {
   color: #ffdd44;
@@ -236,8 +257,12 @@ canvas {
 <div id="lobby">
   <h1>PENGUIN BATTLE!</h1>
   <div class="subtitle">- Online PvP -</div>
-  <input id="room-input" type="text" maxlength="4" placeholder="0000" inputmode="numeric" pattern="[0-9]*">
-  <button id="join-btn" disabled>ルームに参加</button>
+  <div class="lobby-guide">1人目:「ルーム作成」でコードを発行し相手に伝える<br>2人目: コードを入力して「参加」</div>
+  <div class="lobby-btns">
+    <button id="create-btn">ルーム作成</button>
+  </div>
+  <input id="room-input" type="text" maxlength="6" autocapitalize="characters" style="text-transform:uppercase" placeholder="コード入力">
+  <button id="join-btn" disabled>参加</button>
   <div class="status-msg" id="status-msg"></div>
   <div class="error-msg" id="error-msg"></div>
   <div id="rules-box">
@@ -246,7 +271,7 @@ canvas {
     <div class="rules-row"><span class="r-strike">STRIKE</span> <span class="r-arrow">&gt;</span> <span class="r-slap">SLAP</span> <span class="r-desc">高ダメージ</span></div>
     <div class="rules-row"><span class="r-guard">GUARD</span> <span class="r-arrow">&gt;</span> <span class="r-strike">STRIKE</span> <span class="r-desc">防御+反撃</span></div>
   </div>
-  <div id="version-label">v2.5.0</div>
+  <div id="version-label">v2.6.0</div>
 </div>
 
 <div id="mobile-controls">
@@ -277,6 +302,7 @@ const joinBtn = document.getElementById('join-btn');
 const statusMsg = document.getElementById('status-msg');
 const errorMsg = document.getElementById('error-msg');
 const connStatus = document.getElementById('conn-status');
+const createBtn = document.getElementById('create-btn');
 
 // ===== GAME STATE =====
 const STATE = { LOBBY: -1, BATTLE: 1, WIN: 2, LOSE: 3, DRAW: 4 };
@@ -357,18 +383,38 @@ document.querySelectorAll('.atk-btn').forEach(btn => {
 });
 
 // ===== LOBBY UI =====
+function generateRoomCode() {
+  const chars = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789'; // 紛らわしい文字(0/O, 1/I)を除外
+  let code = '';
+  for (let i = 0; i < 6; i++) code += chars[Math.floor(Math.random() * chars.length)];
+  return code;
+}
+
 roomInput.addEventListener('input', () => {
-  const v = roomInput.value.replace(/\D/g, '').slice(0, 4);
+  const v = roomInput.value.replace(/[^A-Za-z0-9]/g, '').toUpperCase().slice(0, 6);
   roomInput.value = v;
-  joinBtn.disabled = v.length !== 4 || !ws || ws.readyState !== WebSocket.OPEN;
+  joinBtn.disabled = v.length !== 6 || !ws || ws.readyState !== WebSocket.OPEN;
+  errorMsg.textContent = '';
+});
+
+createBtn.addEventListener('click', () => {
+  if (!ws || ws.readyState !== WebSocket.OPEN) return;
+  const code = generateRoomCode();
+  roomInput.value = code;
+  roomCode = code;
+  ws.send(JSON.stringify({ action: 'join', room: roomCode }));
+  joinBtn.disabled = true;
+  createBtn.disabled = true;
+  statusMsg.textContent = '接続中...';
   errorMsg.textContent = '';
 });
 
 joinBtn.addEventListener('click', () => {
   roomCode = roomInput.value;
-  if (roomCode.length === 4 && ws && ws.readyState === WebSocket.OPEN) {
+  if (roomCode.length === 6 && ws && ws.readyState === WebSocket.OPEN) {
     ws.send(JSON.stringify({ action: 'join', room: roomCode }));
     joinBtn.disabled = true;
+    createBtn.disabled = true;
     statusMsg.textContent = '接続中...';
     errorMsg.textContent = '';
   }
@@ -388,7 +434,8 @@ function connectWS() {
   ws.onopen = () => {
     connStatus.textContent = '接続済み';
     connStatus.style.background = 'rgba(0,150,0,0.5)';
-    joinBtn.disabled = roomInput.value.length !== 4;
+    joinBtn.disabled = roomInput.value.length !== 6;
+    createBtn.disabled = false;
   };
 
   ws.onmessage = (e) => {
@@ -400,6 +447,7 @@ function connectWS() {
     connStatus.textContent = '切断';
     connStatus.style.background = 'rgba(200,0,0,0.5)';
     joinBtn.disabled = true;
+    createBtn.disabled = true;
     clearWaitingTimer();
     statusMsg.style.color = '';
     if (gameState === STATE.BATTLE) {
@@ -440,7 +488,8 @@ function startWaitingCountdown(room) {
       }
       errorMsg.textContent = '待機がタイムアウトしました';
       statusMsg.textContent = '';
-      joinBtn.disabled = roomInput.value.length !== 4 || !ws || ws.readyState !== WebSocket.OPEN;
+      joinBtn.disabled = roomInput.value.length !== 6 || !ws || ws.readyState !== WebSocket.OPEN;
+      createBtn.disabled = !ws || ws.readyState !== WebSocket.OPEN;
       return;
     }
     const min = Math.floor(remaining / 60);
@@ -513,7 +562,8 @@ function handleServerMessage(msg) {
       statusMsg.style.color = '';
       errorMsg.textContent = msg.message || 'エラーが発生しました';
       statusMsg.textContent = '';
-      joinBtn.disabled = roomInput.value.length !== 4;
+      joinBtn.disabled = roomInput.value.length !== 6;
+      createBtn.disabled = false;
       break;
   }
 }
@@ -1262,10 +1312,11 @@ function returnToLobby() {
   statusMsg.style.color = '';
   errorMsg.textContent = '';
   // Keep room code for easy rematch — pre-fill input with last room
-  if (roomCode && roomCode.length === 4) {
+  if (roomCode && roomCode.length === 6) {
     roomInput.value = roomCode;
   }
-  joinBtn.disabled = roomInput.value.length !== 4 || !ws || ws.readyState !== WebSocket.OPEN;
+  joinBtn.disabled = roomInput.value.length !== 6 || !ws || ws.readyState !== WebSocket.OPEN;
+  createBtn.disabled = !ws || ws.readyState !== WebSocket.OPEN;
   roomCode = '';
   myRole = '';
   lastRemoteState = null;
