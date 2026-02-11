@@ -354,8 +354,32 @@ function handleServerMessage(msg) {
       remoteInput.left = !!msg.left;
       remoteInput.right = !!msg.right;
       remoteInput.up = !!msg.up;
-      remoteInput.atk = msg.atk != null ? msg.atk : -1;
+      // Only set atk if it's a new attack (>= 0), don't overwrite with -1
+      // because -1 just means "not pressing" and we already clear after apply
+      if (msg.atk >= 0) remoteInput.atk = msg.atk;
       break;
+
+    case 'sync': {
+      // Opponent sent their authoritative position — correct our view of them
+      const rp = remotePenguin;
+      const dx = msg.x - rp.x;
+      const dy = msg.y - rp.y;
+      // Smooth interpolation to avoid teleporting
+      if (Math.abs(dx) > 50 || Math.abs(dy) > 50) {
+        // Big desync: snap immediately
+        rp.x = msg.x;
+        rp.y = msg.y;
+        rp.vx = msg.vx;
+        rp.vy = msg.vy;
+      } else {
+        // Small desync: blend toward correct position
+        rp.x += dx * 0.3;
+        rp.y += dy * 0.3;
+        rp.vx = msg.vx;
+        rp.vy = msg.vy;
+      }
+      break;
+    }
 
     case 'damage': {
       const target = msg.target === myRole ? myPenguin() : opponentPenguin();
@@ -385,6 +409,7 @@ function handleServerMessage(msg) {
 connectWS();
 
 // ===== REMOTE INPUT STATE =====
+// Remote input is consumed once per frame then attack is cleared
 const remoteInput = { left: false, right: false, up: false, atk: -1 };
 
 // ===== PENGUIN CLASS =====
@@ -729,6 +754,8 @@ function updateDamageTexts() {
 
 // ===== INPUT & NETWORK =====
 let lastSentInput = null;
+const SYNC_INTERVAL = 6; // send state sync every N frames
+const INPUT_SEND_INTERVAL = 3; // send input every N frames even if unchanged
 
 function handleLocalInput() {
   if (localPenguin.hitTimer > 0) return;
@@ -750,9 +777,12 @@ function handleLocalInput() {
   if (inp.atk >= 0) localPenguin.attack(inp.atk);
   if (Math.abs(localPenguin.vx) > 5) localPenguin.vx = 5 * Math.sign(localPenguin.vx);
 
-  // Send to server (only when changed, to reduce messages)
+  // Send input to server: on change OR periodically
   const inputKey = `${inp.left}${inp.right}${inp.up}${inp.atk}`;
-  if (inputKey !== lastSentInput && ws && ws.readyState === WebSocket.OPEN) {
+  const changed = inputKey !== lastSentInput;
+  const periodic = frameCount % INPUT_SEND_INTERVAL === 0;
+
+  if ((changed || periodic) && ws && ws.readyState === WebSocket.OPEN) {
     ws.send(JSON.stringify({
       action: 'input',
       room: roomCode,
@@ -764,14 +794,41 @@ function handleLocalInput() {
     }));
     lastSentInput = inputKey;
   }
+
+  // Periodic state sync: send authoritative position of local penguin
+  if (frameCount % SYNC_INTERVAL === 0 && ws && ws.readyState === WebSocket.OPEN) {
+    ws.send(JSON.stringify({
+      action: 'sync',
+      room: roomCode,
+      x: Math.round(localPenguin.x * 10) / 10,
+      y: Math.round(localPenguin.y * 10) / 10,
+      vx: Math.round(localPenguin.vx * 100) / 100,
+      vy: Math.round(localPenguin.vy * 100) / 100,
+    }));
+  }
 }
 
+let prevRemoteUp = false;
+
 function applyRemoteInput() {
-  if (remotePenguin.hitTimer > 0) return;
+  if (remotePenguin.hitTimer > 0) {
+    prevRemoteUp = remoteInput.up;
+    return;
+  }
+  // Movement: continuous (applied every frame while held)
   if (remoteInput.left) remotePenguin.vx -= 1.0;
   if (remoteInput.right) remotePenguin.vx += 1.0;
-  if (remoteInput.up && remotePenguin.grounded) remotePenguin.vy = -12;
+
+  // Jump: edge-triggered (only on rising edge of up)
+  if (remoteInput.up && !prevRemoteUp && remotePenguin.grounded) {
+    remotePenguin.vy = -12;
+  }
+  prevRemoteUp = remoteInput.up;
+
+  // Attack: one-shot (cleared after applying)
   if (remoteInput.atk >= 0) remotePenguin.attack(remoteInput.atk);
+  remoteInput.atk = -1;
+
   if (Math.abs(remotePenguin.vx) > 5) remotePenguin.vx = 5 * Math.sign(remotePenguin.vx);
 }
 

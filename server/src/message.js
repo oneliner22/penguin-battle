@@ -143,8 +143,9 @@ exports.handler = async (event) => {
       break;
     }
 
-    case 'input': {
-      // Relay input to opponent
+    case 'input':
+    case 'sync': {
+      // Relay input or sync to opponent
       const roomCode = String(body.room || '');
       const room = (await ddb.send(new GetCommand({ TableName: TABLE, Key: { roomCode } }))).Item;
       if (!room || room.status !== 'playing') break;
@@ -154,14 +155,25 @@ exports.handler = async (event) => {
         : room.p1ConnectionId;
 
       if (opponentCid) {
-        await sendTo(api, opponentCid, {
-          type: 'input',
-          frame: body.frame,
-          left: body.left,
-          right: body.right,
-          up: body.up,
-          atk: body.atk,
-        });
+        if (body.action === 'input') {
+          await sendTo(api, opponentCid, {
+            type: 'input',
+            frame: body.frame,
+            left: body.left,
+            right: body.right,
+            up: body.up,
+            atk: body.atk,
+          });
+        } else {
+          // sync: relay position/velocity
+          await sendTo(api, opponentCid, {
+            type: 'sync',
+            x: body.x,
+            y: body.y,
+            vx: body.vx,
+            vy: body.vy,
+          });
+        }
       }
       break;
     }
