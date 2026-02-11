@@ -216,6 +216,9 @@ exports.handler = async (event) => {
       const room = (await ddb.send(new GetCommand({ TableName: TABLE, Key: { roomCode } }))).Item;
       if (!room) break;
 
+      // Only process if room is still in 'playing' state (prevents double-end race)
+      if (room.status !== 'playing') break;
+
       const winner = body.winner || 'unknown';
       const endMsg = { type: 'end', winner };
       if (body.timeup) endMsg.timeup = true;
@@ -224,18 +227,26 @@ exports.handler = async (event) => {
       if (room.p2ConnectionId) await sendTo(api, room.p2ConnectionId, endMsg);
 
       // Reset room to waiting with no players, extend TTL for rematch
-      await ddb.send(new UpdateCommand({
-        TableName: TABLE,
-        Key: { roomCode },
-        UpdateExpression: 'SET #s = :waiting, p1ConnectionId = :empty, p2ConnectionId = :empty, seed = :zero, hitCount = :zero, #t = :ttl',
-        ExpressionAttributeNames: { '#s': 'status', '#t': 'ttl' },
-        ExpressionAttributeValues: {
-          ':waiting': 'waiting',
-          ':empty': '',
-          ':zero': 0,
-          ':ttl': Math.floor(Date.now() / 1000) + 300,
-        },
-      }));
+      // Use ConditionExpression to prevent race condition with second 'end' message
+      try {
+        await ddb.send(new UpdateCommand({
+          TableName: TABLE,
+          Key: { roomCode },
+          UpdateExpression: 'SET #s = :waiting, p1ConnectionId = :empty, p2ConnectionId = :empty, seed = :zero, hitCount = :zero, #t = :ttl',
+          ExpressionAttributeNames: { '#s': 'status', '#t': 'ttl' },
+          ConditionExpression: '#s = :playing',
+          ExpressionAttributeValues: {
+            ':waiting': 'waiting',
+            ':empty': '',
+            ':zero': 0,
+            ':ttl': Math.floor(Date.now() / 1000) + 300,
+            ':playing': 'playing',
+          },
+        }));
+      } catch (e) {
+        // ConditionalCheckFailedException means another 'end' already processed — ignore
+        if (e.name !== 'ConditionalCheckFailedException') throw e;
+      }
       break;
     }
   }

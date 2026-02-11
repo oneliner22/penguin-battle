@@ -246,7 +246,7 @@ canvas {
     <div class="rules-row"><span class="r-strike">STRIKE</span> <span class="r-arrow">&gt;</span> <span class="r-slap">SLAP</span> <span class="r-desc">高ダメージ</span></div>
     <div class="rules-row"><span class="r-guard">GUARD</span> <span class="r-arrow">&gt;</span> <span class="r-strike">STRIKE</span> <span class="r-desc">防御+反撃</span></div>
   </div>
-  <div id="version-label">v2.3.0</div>
+  <div id="version-label">v2.4.0</div>
 </div>
 
 <div id="mobile-controls">
@@ -499,6 +499,7 @@ class Penguin {
     this.animTimer = 0;
     this.slideTimer = 0;
     this.invincible = 0;
+    this._hitSent = false;
   }
 
   update(other) {
@@ -600,8 +601,8 @@ class Penguin {
         this.slideTimer = 22;
         break;
       case 2: // GUARD — defensive stance, counters STRIKE, weak to SLAP
-        this.attackTimer = 20;
-        this.attackCooldown = 35;
+        this.attackTimer = 25;
+        this.attackCooldown = 30;
         // No movement impulse — stay in place
         break;
     }
@@ -961,42 +962,30 @@ function applyRemoteState() {
 }
 
 // ===== ATTACK HIT DETECTION =====
-// Track whether current attack has already hit (per penguin)
-// Using a simple flag on the penguin object instead of WeakMap
-
 function checkAttacks(attacker, defender) {
   // Only local player reports hits
   if (!attacker.isLocal) return;
   if (!attacker.isAttacking) return;
+  if (attacker.attackType === 2) return; // GUARD has no offensive hitbox
+  if (attacker._hitSent) return; // Already hit this attack
 
-  const atkBox = attacker.getAttackBox();
-  if (!atkBox) return; // GUARD returns null — no offensive hitbox
+  // No timer window restriction — if the attack is active, it can hit.
+  // The _hitSent flag ensures only one hit per attack.
+  // This is maximally generous: any frame during the attack animation can register a hit.
 
-  // Already hit this attack cycle
-  if (attacker._hitSent) return;
-
-  // Hit detection window: nearly the entire attack animation
-  // SLAP (timer 10→0): active frames timer 2-9 (8 frame window)
-  // STRIKE (timer 22→0): active frames timer 4-20 (17 frame window)
-  const minFrame = attacker.attackType === 1 ? 4 : 2;
-  const maxFrame = attacker.attackType === 1 ? 20 : 9;
-  if (attacker.attackTimer < minFrame || attacker.attackTimer > maxFrame) {
-    return;
-  }
-
-  // Simple distance-based hit check (more generous than box overlap)
+  // Simple distance-based hit check
   const dx = Math.abs(attacker.x + attacker.facing * 15 - defender.x);
   const dy = Math.abs(attacker.y - defender.y);
-  const hitRange = attacker.attackType === 1 ? 70 : 55; // STRIKE has longer reach due to slide
-  const hitRangeY = 50;
+  const hitRange = attacker.attackType === 1 ? 75 : 60;
+  const hitRangeY = 55;
 
   if (dx < hitRange && dy < hitRangeY) {
     attacker._hitSent = true;
 
     if (ws && ws.readyState === WebSocket.OPEN) {
-      // Check rock-paper-scissors interaction
-      const isCountered = attacker.attackType === 1 && // STRIKE
-                          defender.isAttacking && defender.attackType === 2; // vs GUARD
+      // Check rock-paper-scissors: STRIKE vs active GUARD = countered
+      const isCountered = attacker.attackType === 1 &&
+                          defender.isAttacking && defender.attackType === 2;
 
       ws.send(JSON.stringify({
         action: 'hit',
@@ -1061,11 +1050,16 @@ function updateBattle() {
 
   handleLocalInput();
   applyRemoteState();
-  localPenguin.update(remotePenguin);
-  remotePenguin.updateRemote(localPenguin);
 
+  // IMPORTANT: Check attacks BEFORE update() so that:
+  // 1. The attack is still in its active state (isAttacking=true)
+  // 2. update() hasn't decremented attackTimer to 0 yet (which clears isAttacking)
+  // This ensures every frame of the attack animation can register a hit.
   checkAttacks(localPenguin, remotePenguin);
   checkAttacks(remotePenguin, localPenguin);
+
+  localPenguin.update(remotePenguin);
+  remotePenguin.updateRemote(localPenguin);
 
   localPenguin.draw();
   remotePenguin.draw();
