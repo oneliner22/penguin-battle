@@ -16,7 +16,7 @@ body {
   height: 100dvh;
   font-family: 'Segoe UI', sans-serif;
   overflow: hidden;
-  touch-action: manipulation;
+  touch-action: none;
   -webkit-touch-callout: none;
   -webkit-user-select: none;
   user-select: none;
@@ -25,7 +25,7 @@ canvas {
   border: 3px solid #4a90d9;
   border-radius: 8px;
   box-shadow: 0 0 30px rgba(74, 144, 217, 0.3);
-  touch-action: manipulation;
+  touch-action: none;
 }
 
 /* Lobby overlay */
@@ -39,7 +39,7 @@ canvas {
   justify-content: center;
   z-index: 20;
   gap: 16px;
-  touch-action: manipulation;
+  touch-action: none;
 }
 #lobby.hidden { display: none; }
 #lobby h1 {
@@ -81,7 +81,7 @@ canvas {
   border-radius: 12px;
   border: none;
   cursor: pointer;
-  touch-action: manipulation;
+  touch-action: none;
 }
 #join-btn {
   background: #4a90d9;
@@ -140,7 +140,7 @@ canvas {
   justify-content: center;
   font-size: 22px;
   color: rgba(255,255,255,0.7);
-  touch-action: manipulation;
+  touch-action: none;
   -webkit-tap-highlight-color: transparent;
 }
 .dpad-btn.pressed {
@@ -168,7 +168,7 @@ canvas {
   font-size: 12px;
   font-weight: bold;
   color: #fff;
-  touch-action: manipulation;
+  touch-action: none;
   -webkit-tap-highlight-color: transparent;
 }
 .atk-btn.pressed {
@@ -246,7 +246,7 @@ canvas {
     <div class="rules-row"><span class="r-strike">STRIKE</span> <span class="r-arrow">&gt;</span> <span class="r-slap">SLAP</span> <span class="r-desc">高ダメージ</span></div>
     <div class="rules-row"><span class="r-guard">GUARD</span> <span class="r-arrow">&gt;</span> <span class="r-strike">STRIKE</span> <span class="r-desc">防御+反撃</span></div>
   </div>
-  <div id="version-label">v2.1.0</div>
+  <div id="version-label">v2.2.0</div>
 </div>
 
 <div id="mobile-controls">
@@ -287,6 +287,26 @@ let battleStartTimer = 0;
 let myRole = ''; // 'p1' or 'p2'
 let roomCode = '';
 let frameCount = 0;
+
+// ===== DOUBLE-TAP ZOOM PREVENTION (iOS Safari) =====
+// touch-action: none alone is insufficient on iOS Safari 14+
+// This global handler prevents double-tap zoom by intercepting rapid taps
+let lastTouchEnd = 0;
+document.addEventListener('touchstart', (e) => {
+  // Prevent double-tap zoom on ALL elements except the text input
+  if (e.target.tagName === 'INPUT') return;
+  if (e.touches.length > 1) { e.preventDefault(); } // Prevent pinch zoom
+}, { passive: false });
+document.addEventListener('touchend', (e) => {
+  if (e.target.tagName === 'INPUT') return;
+  const now = Date.now();
+  if (now - lastTouchEnd < 300) {
+    e.preventDefault(); // Prevent double-tap zoom
+  }
+  lastTouchEnd = now;
+}, { passive: false });
+// Prevent gesturestart (Safari pinch/zoom)
+document.addEventListener('gesturestart', (e) => { e.preventDefault(); }, { passive: false });
 
 // ===== KEYS & TOUCH =====
 const keys = {};
@@ -554,6 +574,8 @@ class Penguin {
     if (this.attackCooldown > 0 || this.isAttacking) return;
     this.isAttacking = true;
     this.attackType = type;
+    // Clear hit registration for new attack
+    if (typeof hitRegistered !== 'undefined') hitRegistered.delete(this);
     switch (type) {
       case 0: // SLAP — fast, low damage, pierces GUARD
         this.attackTimer = 10;
@@ -576,10 +598,10 @@ class Penguin {
   getAttackBox() {
     if (!this.isAttacking) return null;
     switch (this.attackType) {
-      case 0: // SLAP
-        return { x: this.x + this.facing * 25, y: this.y - 15, w: 30, h: 20 };
-      case 1: // STRIKE
-        return { x: this.x + this.facing * 10, y: this.y + 10, w: 45, h: 20 };
+      case 0: // SLAP — wider and taller hitbox
+        return { x: this.x + this.facing * 22, y: this.y - 18, w: 40, h: 35 };
+      case 1: // STRIKE — wider hitbox for slide attack
+        return { x: this.x + this.facing * 10, y: this.y + 5, w: 55, h: 35 };
       case 2: // GUARD — no attack hitbox
         return null;
     }
@@ -695,9 +717,12 @@ class Penguin {
       if (this.attackType === 0) {
         ctx.strokeStyle = '#fff'; ctx.lineWidth = 3;
         for (let i = 0; i < 3; i++) {
-          const angle = f * (-0.5 + i * 0.3);
-          ctx.beginPath(); ctx.moveTo(f * 20, -25);
-          ctx.lineTo(f * 20 + Math.cos(angle) * 20, -25 + Math.sin(angle) * 20);
+          const baseAngle = -0.5 + i * 0.3; // spread angles
+          const startX = f * 20;
+          const endX = startX + f * Math.abs(Math.cos(baseAngle)) * 22;
+          const endY = -25 + Math.sin(baseAngle) * 22;
+          ctx.beginPath(); ctx.moveTo(startX, -25);
+          ctx.lineTo(endX, endY);
           ctx.stroke();
         }
       } else if (this.attackType === 1) {
@@ -922,18 +947,30 @@ function applyRemoteState() {
 }
 
 // ===== ATTACK HIT DETECTION =====
+// Track which attacks have already registered a hit to prevent multi-hit
+const hitRegistered = new WeakMap();
+
 function checkAttacks(attacker, defender) {
   const atkBox = attacker.getAttackBox();
   if (!atkBox) return; // GUARD returns null — no offensive hitbox
 
-  // Hit detection frame: SLAP at frame 6, STRIKE at frame 15
-  const expectedFrame = attacker.attackType === 1 ? 15 : 6;
-  if (attacker.attackTimer !== expectedFrame) return;
+  // Hit detection window: SLAP frames 4-8, STRIKE frames 12-18 (5-7 frame window)
+  const minFrame = attacker.attackType === 1 ? 12 : 4;
+  const maxFrame = attacker.attackType === 1 ? 18 : 8;
+  if (attacker.attackTimer < minFrame || attacker.attackTimer > maxFrame) {
+    return;
+  }
+
+  // Only register one hit per attack
+  const attackKey = attacker;
+  if (hitRegistered.get(attackKey)) return;
 
   const hit = Math.abs(atkBox.x - defender.x) < atkBox.w &&
-              Math.abs(atkBox.y - (defender.y - 20)) < atkBox.h + 15;
+              Math.abs(atkBox.y - (defender.y - 20)) < atkBox.h + 20;
 
   if (hit && attacker.isLocal && ws && ws.readyState === WebSocket.OPEN) {
+    hitRegistered.set(attackKey, true);
+
     // Check rock-paper-scissors interaction
     const isCountered = attacker.attackType === 1 && // STRIKE
                         defender.isAttacking && defender.attackType === 2; // vs GUARD
