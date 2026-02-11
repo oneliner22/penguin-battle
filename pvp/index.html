@@ -16,7 +16,7 @@ body {
   height: 100dvh;
   font-family: 'Segoe UI', sans-serif;
   overflow: hidden;
-  touch-action: none;
+  touch-action: manipulation;
   -webkit-touch-callout: none;
   -webkit-user-select: none;
   user-select: none;
@@ -38,6 +38,7 @@ canvas {
   justify-content: center;
   z-index: 20;
   gap: 16px;
+  touch-action: auto;
 }
 #lobby.hidden { display: none; }
 #lobby h1 {
@@ -62,6 +63,9 @@ canvas {
   letter-spacing: 12px;
   font-family: 'Courier New', monospace;
   outline: none;
+  touch-action: auto;
+  -webkit-user-select: text;
+  user-select: text;
 }
 #lobby input::placeholder {
   letter-spacing: 2px;
@@ -135,7 +139,7 @@ canvas {
   justify-content: center;
   font-size: 22px;
   color: rgba(255,255,255,0.7);
-  touch-action: none;
+  touch-action: manipulation;
   -webkit-tap-highlight-color: transparent;
 }
 .dpad-btn.pressed {
@@ -163,7 +167,7 @@ canvas {
   font-size: 12px;
   font-weight: bold;
   color: #fff;
-  touch-action: none;
+  touch-action: manipulation;
   -webkit-tap-highlight-color: transparent;
 }
 .atk-btn.pressed {
@@ -204,11 +208,11 @@ canvas {
 <div id="lobby">
   <h1>PENGUIN BATTLE!</h1>
   <div class="subtitle">- Online PvP -</div>
-  <input id="room-input" type="tel" maxlength="4" placeholder="0000" inputmode="numeric">
+  <input id="room-input" type="text" maxlength="4" placeholder="0000" inputmode="numeric" pattern="[0-9]*">
   <button id="join-btn" disabled>ルームに参加</button>
   <div class="status-msg" id="status-msg"></div>
   <div class="error-msg" id="error-msg"></div>
-  <div id="version-label">v2.0.0</div>
+  <div id="version-label">v2.0.1</div>
 </div>
 
 <div id="mobile-controls">
