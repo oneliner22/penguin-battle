@@ -1025,6 +1025,8 @@ function drawResult() {
   }
 
   if (keys[' '] || keys['Enter']) {
+    keys[' '] = false;
+    keys['Enter'] = false;
     gameState = STATE.TITLE;
     resetBattle();
     keybindBtn.style.display = 'none';
