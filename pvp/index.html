@@ -279,6 +279,21 @@ canvas {
 .kb-row .kb-key { color: #fff; font-family: 'Courier New', monospace; }
 #keybind-box .kb-close { display: block; margin: 16px auto 0; padding: 6px 24px; border-radius: 8px; border: 1px solid #4a90d9; background: transparent; color: #58a6ff; cursor: pointer; font-size: 14px; }
 
+/* Solo link */
+#solo-link {
+  display: inline-block;
+  margin-top: 12px;
+  padding: 6px 18px;
+  border: 1px solid rgba(170,204,255,0.4);
+  border-radius: 8px;
+  background: transparent;
+  color: #aaccff;
+  font-size: 13px;
+  text-decoration: none;
+  transition: border-color 0.2s, color 0.2s;
+}
+#solo-link:hover { border-color: #aaccff; color: #fff; }
+
 /* Version label */
 #version-label {
   position: fixed;
@@ -325,6 +340,7 @@ canvas {
     <div class="rules-row"><span class="r-strike">STRIKE</span> <span class="r-arrow">&gt;</span> <span class="r-slap">SLAP</span> <span class="r-desc">高ダメージ</span></div>
     <div class="rules-row"><span class="r-guard">GUARD</span> <span class="r-arrow">&gt;</span> <span class="r-strike">STRIKE</span> <span class="r-desc">防御+反撃</span></div>
   </div>
+  <a href="../mobile/" id="solo-link">1人で遊ぶ (vs NPC)</a>
   <div id="version-label">v2.6.0</div>
 </div>
 

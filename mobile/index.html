@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-<title>Penguin Battle! - Mobile</title>
+<title>Penguin Battle! - vs NPC</title>
 <style>
 * { margin: 0; padding: 0; box-sizing: border-box; }
 body {
@@ -17,6 +17,7 @@ body {
   font-family: 'Segoe UI', sans-serif;
   overflow: hidden;
   touch-action: none;
+  overscroll-behavior: none;
   -webkit-touch-callout: none;
   -webkit-user-select: none;
   user-select: none;
@@ -25,6 +26,7 @@ canvas {
   border: 3px solid #4a90d9;
   border-radius: 8px;
   box-shadow: 0 0 30px rgba(74, 144, 217, 0.3);
+  touch-action: none;
 }
 #mobile-controls {
   display: flex;
@@ -92,9 +94,9 @@ canvas {
   filter: brightness(1.4);
   transform: scale(0.95);
 }
-.atk-slap  { background: rgba(74,144,217,0.4);  border-color: rgba(74,144,217,0.7); }
-.atk-slide { background: rgba(244,166,35,0.4);   border-color: rgba(244,166,35,0.7); }
-.atk-flop  { background: rgba(217,74,74,0.4);    border-color: rgba(217,74,74,0.7); }
+.atk-slap   { background: rgba(74,144,217,0.4);  border-color: rgba(74,144,217,0.7); }
+.atk-strike { background: rgba(244,166,35,0.4);   border-color: rgba(244,166,35,0.7); }
+.atk-guard  { background: rgba(217,74,74,0.4);    border-color: rgba(217,74,74,0.7); }
 </style>
 </head>
 <body>
@@ -107,8 +109,8 @@ canvas {
   </div>
   <div class="attack-buttons">
     <div class="atk-btn atk-slap" data-atk="0">SLAP</div>
-    <div class="atk-btn atk-slide" data-atk="1">SLIDE</div>
-    <div class="atk-btn atk-flop" data-atk="2">FLOP</div>
+    <div class="atk-btn atk-strike" data-atk="1">STRIKE</div>
+    <div class="atk-btn atk-guard" data-atk="2">GUARD</div>
   </div>
 </div>
 <script>
@@ -116,13 +118,17 @@ const canvas = document.getElementById('game');
 const ctx = canvas.getContext('2d');
 
 // Game State
-const STATE = { TITLE: 0, BATTLE: 1, WIN: 2, LOSE: 3 };
+const STATE = { TITLE: 0, BATTLE: 1, WIN: 2, LOSE: 3, DRAW: 4 };
 let gameState = STATE.TITLE;
 let shakeTimer = 0;
 let shakeIntensity = 0;
 let particles = [];
 let damageTexts = [];
 let battleStartTimer = 0;
+
+const BATTLE_TIME_LIMIT = 60;
+let battleStartTime = 0;
+let battleTimeUp = false;
 
 // Keys (for keyboard fallback)
 const keys = {};
@@ -178,11 +184,36 @@ document.querySelectorAll('.atk-btn').forEach(btn => {
 // Tap on canvas for start/retry
 canvas.addEventListener('touchstart', (e) => {
   e.preventDefault();
-  if (gameState === STATE.TITLE || gameState === STATE.WIN || gameState === STATE.LOSE) {
+  if (gameState === STATE.TITLE || gameState === STATE.WIN || gameState === STATE.LOSE || gameState === STATE.DRAW) {
     keys[' '] = true;
     setTimeout(() => { keys[' '] = false; }, 100);
   }
 }, { passive: false });
+
+// Seeded PRNG (mulberry32) for damage calculation
+function mulberry32(seed) {
+  return function() {
+    let t = seed += 0x6D2B79F5;
+    t = Math.imul(t ^ t >>> 15, t | 1);
+    t ^= t + Math.imul(t ^ t >>> 7, t | 61);
+    return ((t ^ t >>> 14) >>> 0) / 4294967296;
+  };
+}
+
+let gameSeed = 0;
+let hitCount = 0;
+
+function calcDamage(attackType, countered) {
+  if (countered) return 5;
+  hitCount++;
+  const rng = mulberry32(gameSeed + hitCount * 7919);
+  const r = rng();
+  switch (attackType) {
+    case 0: return 6 + r * 4;   // SLAP: 6-10
+    case 1: return 14 + r * 6;  // STRIKE: 14-20
+    default: return 0;
+  }
+}
 
 // Penguin class
 class Penguin {
@@ -201,19 +232,16 @@ class Penguin {
     this.attackTimer = 0;
     this.attackCooldown = 0;
     this.isAttacking = false;
-    this.attackType = 0; // 0=punch, 1=slide, 2=belly
+    this.attackType = 0;
     this.hitTimer = 0;
     this.grounded = false;
     this.animTimer = 0;
     this.slideTimer = 0;
     this.invincible = 0;
-    this.comboCount = 0;
-    this.lastHitTime = 0;
+    this._hitSent = false;
     // NPC AI
     this.aiTimer = 0;
     this.aiAction = 'idle';
-    this.aiTargetX = 0;
-    this.specialCooldown = 0;
   }
 
   update(other) {
@@ -222,7 +250,6 @@ class Penguin {
     if (this.invincible > 0) this.invincible--;
     if (this.hitTimer > 0) this.hitTimer--;
     if (this.slideTimer > 0) this.slideTimer--;
-    if (this.specialCooldown > 0) this.specialCooldown--;
 
     // Gravity
     this.vy += 0.6;
@@ -274,24 +301,36 @@ class Penguin {
     const dist = Math.abs(this.x - player.x);
 
     if (this.aiTimer <= 0) {
-      this.aiTimer = 20 + Math.random() * 30;
+      this.aiTimer = 15 + Math.random() * 25;
 
       if (dist > 200) {
         this.aiAction = 'approach';
-      } else if (dist < 60) {
-        if (Math.random() < 0.5) {
-          this.aiAction = 'attack';
+      } else if (dist < 80) {
+        // Close range: react to player state
+        if (player.isAttacking && player.attackType === 1) {
+          // Player using STRIKE: GUARD to counter
+          this.aiAction = Math.random() < 0.6 ? 'guard' : 'retreat';
+        } else if (player.isAttacking && player.attackType === 2) {
+          // Player GUARDing: SLAP pierces
+          this.aiAction = Math.random() < 0.6 ? 'slap' : 'approach';
         } else {
-          this.aiAction = 'retreat';
+          const r = Math.random();
+          if (r < 0.3) this.aiAction = 'slap';
+          else if (r < 0.5) this.aiAction = 'strike';
+          else if (r < 0.65) this.aiAction = 'guard';
+          else if (r < 0.8) this.aiAction = 'retreat';
+          else this.aiAction = 'approach';
         }
       } else if (dist < 150) {
+        // Mid range
         const r = Math.random();
-        if (r < 0.35) this.aiAction = 'attack';
-        else if (r < 0.55) this.aiAction = 'slide';
+        if (r < 0.25) this.aiAction = 'approach';
+        else if (r < 0.45) this.aiAction = 'strike';
+        else if (r < 0.6) this.aiAction = 'slap';
         else if (r < 0.7) this.aiAction = 'jump_attack';
-        else this.aiAction = 'approach';
+        else this.aiAction = 'guard';
       } else {
-        this.aiAction = Math.random() < 0.5 ? 'approach' : 'idle';
+        this.aiAction = Math.random() < 0.6 ? 'approach' : 'idle';
       }
     }
 
@@ -303,7 +342,7 @@ class Penguin {
         this.vx -= this.facing * 1.0;
         if (this.grounded && Math.random() < 0.1) this.vy = -10;
         break;
-      case 'attack':
+      case 'slap':
         if (dist < 70 && this.attackCooldown <= 0) {
           this.attack(0);
           this.aiAction = 'idle';
@@ -311,45 +350,50 @@ class Penguin {
           this.vx += this.facing * 0.5;
         }
         break;
-      case 'slide':
+      case 'strike':
         if (this.attackCooldown <= 0 && this.grounded) {
           this.attack(1);
+          this.aiAction = 'idle';
+        }
+        break;
+      case 'guard':
+        if (this.attackCooldown <= 0) {
+          this.attack(2);
           this.aiAction = 'idle';
         }
         break;
       case 'jump_attack':
         if (this.grounded) this.vy = -11;
         if (dist < 80 && this.attackCooldown <= 0) {
-          this.attack(2);
+          this.attack(0);
           this.aiAction = 'idle';
         }
         break;
     }
 
     // Clamp speed
-    if (Math.abs(this.vx) > 4) this.vx = 4 * Math.sign(this.vx);
+    if (Math.abs(this.vx) > 5) this.vx = 5 * Math.sign(this.vx);
   }
 
   attack(type) {
     if (this.attackCooldown > 0 || this.isAttacking) return;
     this.isAttacking = true;
     this.attackType = type;
+    this._hitSent = false;
     switch (type) {
-      case 0: // Punch (flipper slap)
-        this.attackTimer = 12;
-        this.attackCooldown = 20;
+      case 0: // SLAP — fast, low damage, pierces GUARD
+        this.attackTimer = 10;
+        this.attackCooldown = 15;
         break;
-      case 1: // Slide
-        this.attackTimer = 20;
-        this.attackCooldown = 35;
+      case 1: // STRIKE — slow, high damage, blocked by GUARD
+        this.attackTimer = 22;
+        this.attackCooldown = 40;
         this.vx = this.facing * 8;
-        this.slideTimer = 20;
+        this.slideTimer = 22;
         break;
-      case 2: // Belly flop
-        this.attackTimer = 15;
+      case 2: // GUARD — defensive stance, counters STRIKE, weak to SLAP
+        this.attackTimer = 25;
         this.attackCooldown = 30;
-        this.vy = 6;
-        this.vx = this.facing * 3;
         break;
     }
   }
@@ -357,30 +401,12 @@ class Penguin {
   getAttackBox() {
     if (!this.isAttacking) return null;
     switch (this.attackType) {
-      case 0: // Punch
-        return {
-          x: this.x + this.facing * 25,
-          y: this.y - 15,
-          w: 30,
-          h: 20,
-          damage: 8 + Math.random() * 5
-        };
-      case 1: // Slide
-        return {
-          x: this.x + this.facing * 10,
-          y: this.y + 10,
-          w: 45,
-          h: 20,
-          damage: 12 + Math.random() * 6
-        };
-      case 2: // Belly flop
-        return {
-          x: this.x - 15,
-          y: this.y,
-          w: 30,
-          h: 30,
-          damage: 15 + Math.random() * 8
-        };
+      case 0:
+        return { x: this.x + this.facing * 22, y: this.y - 18, w: 40, h: 35 };
+      case 1:
+        return { x: this.x + this.facing * 10, y: this.y + 5, w: 55, h: 35 };
+      case 2:
+        return null; // GUARD has no offensive hitbox
     }
   }
 
@@ -412,9 +438,7 @@ class Penguin {
     damageTexts.push({
       x: this.x, y: this.y - 40,
       text: Math.floor(dmg).toString(),
-      life: 40,
-      vy: -2,
-      color: '#ffdd44'
+      life: 40, vy: -2, color: '#ffdd44'
     });
   }
 
@@ -517,7 +541,6 @@ class Penguin {
       ctx.font = 'bold 12px sans-serif';
       ctx.textAlign = 'center';
       ctx.fillText('YOU', 0, -55);
-      // Arrow
       ctx.beginPath();
       ctx.moveTo(0, -50);
       ctx.lineTo(-5, -45);
@@ -535,18 +558,19 @@ class Penguin {
     if (this.isAttacking) {
       ctx.globalAlpha = 0.6;
       if (this.attackType === 0) {
-        // Slap effect
-        ctx.strokeStyle = '#fff';
-        ctx.lineWidth = 3;
+        // SLAP effect
+        ctx.strokeStyle = '#fff'; ctx.lineWidth = 3;
         for (let i = 0; i < 3; i++) {
-          const angle = f * (-0.5 + i * 0.3);
-          ctx.beginPath();
-          ctx.moveTo(f * 20, -25);
-          ctx.lineTo(f * 20 + Math.cos(angle) * 20, -25 + Math.sin(angle) * 20);
+          const baseAngle = -0.5 + i * 0.3;
+          const startX = f * 20;
+          const endX = startX + f * Math.abs(Math.cos(baseAngle)) * 22;
+          const endY = -25 + Math.sin(baseAngle) * 22;
+          ctx.beginPath(); ctx.moveTo(startX, -25);
+          ctx.lineTo(endX, endY);
           ctx.stroke();
         }
       } else if (this.attackType === 1) {
-        // Slide sparks
+        // STRIKE sparks
         ctx.fillStyle = '#fff';
         for (let i = 0; i < 5; i++) {
           ctx.beginPath();
@@ -554,13 +578,13 @@ class Penguin {
           ctx.fill();
         }
       } else if (this.attackType === 2) {
-        // Belly flop shockwave
-        ctx.strokeStyle = '#ffdd44';
-        ctx.lineWidth = 2;
-        const r = (15 - this.attackTimer) * 3;
-        ctx.beginPath();
-        ctx.arc(0, 5, r, 0, Math.PI * 2);
-        ctx.stroke();
+        // GUARD: shield bubble effect
+        const pulse = Math.sin(this.attackTimer * 0.5) * 0.15 + 0.45;
+        ctx.strokeStyle = `rgba(255, 100, 100, ${pulse})`;
+        ctx.lineWidth = 3;
+        ctx.beginPath(); ctx.arc(0, -15, 30, 0, Math.PI * 2); ctx.stroke();
+        ctx.fillStyle = `rgba(255, 100, 100, ${pulse * 0.2})`;
+        ctx.beginPath(); ctx.arc(0, -15, 30, 0, Math.PI * 2); ctx.fill();
       }
     }
 
@@ -577,6 +601,10 @@ function resetBattle() {
   particles = [];
   damageTexts = [];
   battleStartTimer = 90;
+  battleStartTime = 0;
+  battleTimeUp = false;
+  gameSeed = Math.floor(Math.random() * 2147483647);
+  hitCount = 0;
 }
 
 resetBattle();
@@ -584,30 +612,24 @@ resetBattle();
 // Draw HP bar
 function drawHPBar(x, y, w, h, hp, maxHp, color, label) {
   const ratio = hp / maxHp;
-  // Background
   ctx.fillStyle = '#333';
   ctx.fillRect(x, y, w, h);
-  // HP
   const barColor = ratio > 0.5 ? color : ratio > 0.25 ? '#f4a623' : '#d94a4a';
   ctx.fillStyle = barColor;
   ctx.fillRect(x, y, w * ratio, h);
-  // Border
   ctx.strokeStyle = '#fff';
   ctx.lineWidth = 2;
   ctx.strokeRect(x, y, w, h);
-  // Label
   ctx.fillStyle = '#fff';
   ctx.font = 'bold 14px sans-serif';
   ctx.textAlign = 'left';
   ctx.fillText(label, x, y - 5);
-  // HP text
   ctx.textAlign = 'center';
   ctx.fillText(`${Math.ceil(hp)} / ${maxHp}`, x + w / 2, y + h - 4);
 }
 
-// Draw ground
+// Draw background
 function drawBackground() {
-  // Sky gradient
   const grad = ctx.createLinearGradient(0, 0, 0, 500);
   grad.addColorStop(0, '#0f1b33');
   grad.addColorStop(0.6, '#1a3a5c');
@@ -615,7 +637,6 @@ function drawBackground() {
   ctx.fillStyle = grad;
   ctx.fillRect(0, 0, 800, 500);
 
-  // Stars
   ctx.fillStyle = '#fff';
   for (let i = 0; i < 30; i++) {
     const sx = (i * 137 + 50) % 800;
@@ -628,7 +649,6 @@ function drawBackground() {
   }
   ctx.globalAlpha = 1;
 
-  // Snow ground
   const snowGrad = ctx.createLinearGradient(0, 400, 0, 500);
   snowGrad.addColorStop(0, '#e8f0ff');
   snowGrad.addColorStop(1, '#b8d0f0');
@@ -643,7 +663,6 @@ function drawBackground() {
   ctx.closePath();
   ctx.fill();
 
-  // Ice blocks in background
   ctx.fillStyle = 'rgba(180, 220, 255, 0.3)';
   ctx.fillRect(50, 360, 40, 45);
   ctx.fillRect(710, 365, 35, 40);
@@ -691,58 +710,56 @@ function updateDamageTexts() {
   ctx.globalAlpha = 1;
 }
 
-// Collision check
-function boxCollide(a, b) {
-  return a.x - a.w / 2 < b.x + b.width / 2 &&
-         a.x + a.w / 2 > b.x - b.width / 2 &&
-         a.y - a.h / 2 < b.y &&
-         a.y + a.h / 2 > b.y - b.height;
-}
-
 // Input handling
 function handleInput() {
   if (player.hitTimer > 0) return;
 
-  // Movement (keyboard + touch)
   if (keys['ArrowLeft'] || keys['a'] || touchState.left) {
     player.vx -= 1.0;
   }
   if (keys['ArrowRight'] || keys['d'] || touchState.right) {
     player.vx += 1.0;
   }
-  // Jump
   if ((keys['ArrowUp'] || keys['w'] || touchState.up) && player.grounded) {
     player.vy = -12;
   }
-  // Attacks (keyboard)
-  if (keys['z'] || keys['j']) {
-    player.attack(0);
-  }
-  if (keys['x'] || keys['k']) {
-    player.attack(1);
-  }
-  if (keys['c'] || keys['l']) {
-    player.attack(2);
-  }
-  // Attacks (touch)
-  if (touchState.atk >= 0) {
-    player.attack(touchState.atk);
-  }
+  if (keys['z'] || keys['j']) player.attack(0);
+  if (keys['x'] || keys['k']) player.attack(1);
+  if (keys['c'] || keys['l']) player.attack(2);
+  if (touchState.atk >= 0) player.attack(touchState.atk);
 
-  // Clamp speed
   if (Math.abs(player.vx) > 5) player.vx = 5 * Math.sign(player.vx);
 }
 
-// Check attack hits
+// Check attack hits (PvP-style distance-based + rock-paper-scissors)
 function checkAttacks(attacker, defender) {
-  const atkBox = attacker.getAttackBox();
-  if (!atkBox) return;
-  if (attacker.attackTimer !== (attacker.attackType === 1 ? 15 : attacker.attackType === 2 ? 10 : 8)) return;
+  if (!attacker.isAttacking) return;
+  if (attacker.attackType === 2) return; // GUARD has no offensive hitbox
+  if (attacker._hitSent) return;
 
-  const hit = Math.abs(atkBox.x - defender.x) < atkBox.w &&
-              Math.abs(atkBox.y - (defender.y - 20)) < atkBox.h + 15;
-  if (hit) {
-    defender.takeDamage(atkBox.damage, attacker.x);
+  const dx = Math.abs(attacker.x + attacker.facing * 15 - defender.x);
+  const dy = Math.abs(attacker.y - defender.y);
+  const hitRange = attacker.attackType === 1 ? 75 : 60;
+  const hitRangeY = 55;
+
+  if (dx < hitRange && dy < hitRangeY) {
+    attacker._hitSent = true;
+
+    // Rock-paper-scissors: STRIKE vs active GUARD = countered
+    const isCountered = attacker.attackType === 1 &&
+                        defender.isAttacking && defender.attackType === 2;
+
+    const dmg = calcDamage(attacker.attackType, isCountered);
+    const target = isCountered ? attacker : defender;
+    target.takeDamage(dmg, isCountered ? defender.x : attacker.x);
+
+    if (isCountered) {
+      damageTexts.push({
+        x: target.x, y: target.y - 60,
+        text: 'COUNTER!', life: 50, vy: -1.5,
+        color: '#ff4444'
+      });
+    }
   }
 }
 
@@ -750,7 +767,6 @@ function checkAttacks(attacker, defender) {
 function gameLoop() {
   ctx.save();
 
-  // Screen shake
   if (shakeTimer > 0) {
     shakeTimer--;
     const sx = (Math.random() - 0.5) * shakeIntensity;
@@ -770,6 +786,7 @@ function gameLoop() {
       break;
     case STATE.WIN:
     case STATE.LOSE:
+    case STATE.DRAW:
       drawResult();
       break;
   }
@@ -779,28 +796,27 @@ function gameLoop() {
 }
 
 function drawTitle() {
-  // Title
   ctx.fillStyle = '#fff';
   ctx.font = 'bold 48px sans-serif';
   ctx.textAlign = 'center';
   ctx.fillText('PENGUIN BATTLE!', 400, 150);
 
-  // Subtitle
   ctx.font = '18px sans-serif';
   ctx.fillStyle = '#aaccff';
-  ctx.fillText('- Penguin vs Penguin -', 400, 185);
+  ctx.fillText('- vs NPC -', 400, 185);
 
-  // Penguins on title
   player.animTimer += 0.05;
   npc.animTimer += 0.05;
   player.draw();
   npc.draw();
 
-  // Controls
   ctx.fillStyle = '#ddd';
   ctx.font = '16px sans-serif';
-  ctx.fillText('D-pad : Move & Jump', 400, 280);
-  ctx.fillText('SLAP / SLIDE / FLOP : Attack', 400, 310);
+  ctx.fillText('D-pad / Arrow / WASD : Move & Jump', 400, 270);
+  ctx.fillText('SLAP(Z) > GUARD(C) > STRIKE(X) > SLAP', 400, 300);
+  ctx.font = '13px sans-serif';
+  ctx.fillStyle = '#8b949e';
+  ctx.fillText('PC / Mobile both supported', 400, 330);
 
   ctx.font = 'bold 22px sans-serif';
   ctx.fillStyle = '#ffdd44';
@@ -815,9 +831,25 @@ function drawTitle() {
   }
 }
 
+function drawTimer(remainSec) {
+  ctx.save();
+  ctx.font = 'bold 28px sans-serif';
+  ctx.textAlign = 'center';
+  if (remainSec <= 10) {
+    ctx.fillStyle = Math.sin(Date.now() * 0.01) > 0 ? '#ff4444' : '#ff8888';
+  } else {
+    ctx.fillStyle = '#fff';
+  }
+  ctx.fillText(remainSec, 400, 25);
+  ctx.restore();
+}
+
 function updateBattle() {
   if (battleStartTimer > 0) {
     battleStartTimer--;
+    if (battleStartTimer === 0) {
+      battleStartTime = Date.now();
+    }
     player.draw();
     npc.draw();
     drawHPBar(30, 25, 250, 22, player.hp, player.maxHp, '#4a90d9', 'YOU');
@@ -826,22 +858,24 @@ function updateBattle() {
     ctx.fillStyle = '#fff';
     ctx.font = 'bold 60px sans-serif';
     ctx.textAlign = 'center';
-    if (battleStartTimer > 60) {
-      ctx.fillText('3', 400, 250);
-    } else if (battleStartTimer > 30) {
-      ctx.fillText('2', 400, 250);
-    } else {
-      ctx.fillText('1', 400, 250);
-    }
+    if (battleStartTimer > 60) ctx.fillText('3', 400, 250);
+    else if (battleStartTimer > 30) ctx.fillText('2', 400, 250);
+    else ctx.fillText('1', 400, 250);
     return;
   }
 
-  handleInput();
-  player.update(npc);
-  npc.update(player);
+  const elapsed = (Date.now() - battleStartTime) / 1000;
+  const remaining = Math.max(0, BATTLE_TIME_LIMIT - elapsed);
+  const remainSec = Math.ceil(remaining);
 
+  handleInput();
+
+  // Check attacks BEFORE update (same as PvP)
   checkAttacks(player, npc);
   checkAttacks(npc, player);
+
+  player.update(npc);
+  npc.update(player);
 
   // Draw
   player.draw();
@@ -849,11 +883,26 @@ function updateBattle() {
   updateParticles();
   updateDamageTexts();
 
-  // HP bars
   drawHPBar(30, 25, 250, 22, player.hp, player.maxHp, '#4a90d9', 'YOU');
   drawHPBar(520, 25, 250, 22, npc.hp, npc.maxHp, '#d94a4a', 'NPC');
 
-  // Check win/lose
+  drawTimer(remainSec);
+
+  // Time up check
+  if (remaining <= 0) {
+    battleTimeUp = true;
+    if (player.hp > npc.hp) {
+      gameState = STATE.WIN;
+      spawnConfetti();
+    } else if (npc.hp > player.hp) {
+      gameState = STATE.LOSE;
+    } else {
+      gameState = STATE.DRAW;
+    }
+    return;
+  }
+
+  // KO check
   if (npc.hp <= 0) {
     gameState = STATE.WIN;
     spawnConfetti();
@@ -866,8 +915,7 @@ function updateBattle() {
 function spawnConfetti() {
   for (let i = 0; i < 50; i++) {
     particles.push({
-      x: 400 + (Math.random() - 0.5) * 300,
-      y: 200,
+      x: 400 + (Math.random() - 0.5) * 300, y: 200,
       vx: (Math.random() - 0.5) * 10,
       vy: -Math.random() * 8 - 3,
       life: 60 + Math.random() * 40,
@@ -886,25 +934,34 @@ function drawResult() {
   drawHPBar(30, 25, 250, 22, player.hp, player.maxHp, '#4a90d9', 'YOU');
   drawHPBar(520, 25, 250, 22, npc.hp, npc.maxHp, '#d94a4a', 'NPC');
 
-  // Overlay
   ctx.fillStyle = 'rgba(0, 0, 0, 0.5)';
-  ctx.fillRect(0, 150, 800, 200);
+  ctx.fillRect(0, 130, 800, 230);
+
+  ctx.textAlign = 'center';
+
+  if (battleTimeUp) {
+    ctx.font = 'bold 24px sans-serif';
+    ctx.fillStyle = '#ffaa44';
+    ctx.fillText('TIME UP!', 400, 175);
+  }
 
   ctx.font = 'bold 50px sans-serif';
-  ctx.textAlign = 'center';
 
   if (gameState === STATE.WIN) {
     ctx.fillStyle = '#4ecdc4';
-    ctx.fillText('YOU WIN!', 400, 240);
-    ctx.font = '20px sans-serif';
-    ctx.fillStyle = '#fff';
-    ctx.fillText('Your penguin is victorious!', 400, 280);
-  } else {
+    ctx.fillText('YOU WIN!', 400, 230);
+    ctx.font = '20px sans-serif'; ctx.fillStyle = '#fff';
+    ctx.fillText('Your penguin is victorious!', 400, 270);
+  } else if (gameState === STATE.LOSE) {
     ctx.fillStyle = '#ff6b6b';
-    ctx.fillText('YOU LOSE...', 400, 240);
-    ctx.font = '20px sans-serif';
-    ctx.fillStyle = '#fff';
-    ctx.fillText('The NPC penguin was stronger this time...', 400, 280);
+    ctx.fillText('YOU LOSE...', 400, 230);
+    ctx.font = '20px sans-serif'; ctx.fillStyle = '#fff';
+    ctx.fillText('Better luck next time...', 400, 270);
+  } else if (gameState === STATE.DRAW) {
+    ctx.fillStyle = '#ffdd44';
+    ctx.fillText('DRAW', 400, 230);
+    ctx.font = '20px sans-serif'; ctx.fillStyle = '#fff';
+    ctx.fillText('Both penguins survived!', 400, 270);
   }
 
   ctx.font = 'bold 18px sans-serif';
