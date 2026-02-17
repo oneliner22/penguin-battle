@@ -130,8 +130,8 @@ exports.handler = async (event) => {
           await ddb.send(new UpdateCommand({
             TableName: TABLE,
             Key: { roomCode },
-            UpdateExpression: 'SET p2ConnectionId = :cid, #s = :playing, seed = :seed, hitCount = :zero, p2Ip = :p2Ip, p1Hp = :maxHp, p2Hp = :maxHp',
-            ExpressionAttributeNames: { '#s': 'status' },
+            UpdateExpression: 'SET p2ConnectionId = :cid, #s = :playing, seed = :seed, hitCount = :zero, p2Ip = :p2Ip, p1Hp = :maxHp, p2Hp = :maxHp, #t = :ttl',
+            ExpressionAttributeNames: { '#s': 'status', '#t': 'ttl' },
             ConditionExpression: 'p2ConnectionId = :empty OR attribute_not_exists(p2ConnectionId)',
             ExpressionAttributeValues: {
               ':cid': connectionId,
@@ -141,12 +141,13 @@ exports.handler = async (event) => {
               ':empty': '',
               ':p2Ip': sourceIp,
               ':maxHp': 100,
+              ':ttl': Math.floor(Date.now() / 1000) + 420,
             },
           }));
 
           // Notify both players
-          await sendTo(api, room.p1ConnectionId, { type: 'start', seed, you: 'p1' });
-          await sendTo(api, connectionId, { type: 'start', seed, you: 'p2' });
+          await sendTo(api, room.p1ConnectionId, { type: 'start', seed, you: 'p1', ttl: 420 });
+          await sendTo(api, connectionId, { type: 'start', seed, you: 'p2', ttl: 420 });
         } else {
           await sendTo(api, connectionId, { type: 'error', code: 'ROOM_FULL', message: 'このルームは満員です' });
         }

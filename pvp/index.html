@@ -626,6 +626,11 @@ function handleServerMessage(msg) {
     case 'start':
       clearWaitingTimer();
       statusMsg.style.color = '';
+      if (msg.ttl !== undefined && msg.ttl < 60) {
+        statusMsg.textContent = '接続の有効期限が近いです。部屋を作り直してください。';
+        statusMsg.style.color = '#ff6666';
+        break;
+      }
       myRole = msg.you;
       copyBtn.style.display = 'none';
       keybindBtn.style.display = 'block';
