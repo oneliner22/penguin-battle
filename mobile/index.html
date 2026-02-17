@@ -97,6 +97,46 @@ canvas {
 .atk-slap   { background: rgba(74,144,217,0.4);  border-color: rgba(74,144,217,0.7); }
 .atk-strike { background: rgba(244,166,35,0.4);   border-color: rgba(244,166,35,0.7); }
 .atk-guard  { background: rgba(217,74,74,0.4);    border-color: rgba(217,74,74,0.7); }
+/* Keybind button & overlay */
+#keybind-btn {
+  position: fixed;
+  top: 8px;
+  left: 8px;
+  padding: 4px 10px;
+  border-radius: 8px;
+  font-size: 12px;
+  color: #aaccff;
+  background: rgba(0,0,0,0.5);
+  border: 1px solid rgba(74,144,217,0.4);
+  cursor: pointer;
+  z-index: 15;
+  display: none;
+}
+#keybind-overlay {
+  display: none;
+  position: fixed;
+  inset: 0;
+  background: rgba(0,0,0,0.85);
+  z-index: 100;
+  justify-content: center;
+  align-items: center;
+}
+#keybind-overlay.show { display: flex; }
+#keybind-box {
+  background: #1a2a4e;
+  border: 2px solid #4a90d9;
+  border-radius: 12px;
+  padding: 24px 32px;
+  color: #fff;
+  font-family: 'Segoe UI', sans-serif;
+  max-width: 340px;
+  width: 90%;
+}
+#keybind-box h3 { margin: 0 0 12px; color: #58a6ff; font-size: 16px; text-align: center; }
+.kb-row { display: flex; justify-content: space-between; padding: 4px 0; font-size: 14px; }
+.kb-row .kb-action { color: #8b949e; }
+.kb-row .kb-key { color: #fff; font-family: 'Courier New', monospace; }
+#keybind-box .kb-close { display: block; margin: 16px auto 0; padding: 6px 24px; border-radius: 8px; border: 1px solid #4a90d9; background: transparent; color: #58a6ff; cursor: pointer; font-size: 14px; }
 </style>
 </head>
 <body>
@@ -111,6 +151,18 @@ canvas {
     <div class="atk-btn atk-slap" data-atk="0">SLAP</div>
     <div class="atk-btn atk-strike" data-atk="1">STRIKE</div>
     <div class="atk-btn atk-guard" data-atk="2">GUARD</div>
+  </div>
+</div>
+<button id="keybind-btn">Keys</button>
+<div id="keybind-overlay">
+  <div id="keybind-box">
+    <h3>PC Keybinds</h3>
+    <div class="kb-row"><span class="kb-action">Move</span><span class="kb-key">&larr; &rarr; / A D</span></div>
+    <div class="kb-row"><span class="kb-action">Jump</span><span class="kb-key">&uarr; / W</span></div>
+    <div class="kb-row"><span class="kb-action">SLAP</span><span class="kb-key">Z / J</span></div>
+    <div class="kb-row"><span class="kb-action">STRIKE</span><span class="kb-key">X / K</span></div>
+    <div class="kb-row"><span class="kb-action">GUARD</span><span class="kb-key">C / L</span></div>
+    <button class="kb-close" id="keybind-close">OK</button>
   </div>
 </div>
 <script>
@@ -828,6 +880,7 @@ function drawTitle() {
   if (keys[' '] || keys['Enter']) {
     gameState = STATE.BATTLE;
     resetBattle();
+    keybindBtn.style.display = 'block';
   }
 }
 
@@ -968,14 +1021,24 @@ function drawResult() {
   ctx.fillStyle = '#ffdd44';
   const blink = Math.sin(Date.now() * 0.005) > 0;
   if (blink) {
-    ctx.fillText('Tap to Retry!', 400, 330);
+    ctx.fillText('Tap to go back', 400, 330);
   }
 
   if (keys[' '] || keys['Enter']) {
-    gameState = STATE.BATTLE;
+    gameState = STATE.TITLE;
     resetBattle();
+    keybindBtn.style.display = 'none';
+    keybindOverlay.classList.remove('show');
   }
 }
+
+// Keybind overlay
+const keybindBtn = document.getElementById('keybind-btn');
+const keybindOverlay = document.getElementById('keybind-overlay');
+const keybindClose = document.getElementById('keybind-close');
+keybindBtn.addEventListener('click', () => { keybindOverlay.classList.add('show'); });
+keybindClose.addEventListener('click', () => { keybindOverlay.classList.remove('show'); });
+keybindOverlay.addEventListener('click', (e) => { if (e.target === keybindOverlay) keybindOverlay.classList.remove('show'); });
 
 // Start
 gameLoop();

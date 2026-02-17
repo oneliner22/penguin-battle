@@ -213,7 +213,7 @@ canvas {
 
 /* Rules box */
 #rules-box {
-  margin-top: 8px;
+  margin-top: -8px;
   padding: 10px 16px;
   background: rgba(255,255,255,0.06);
   border-radius: 10px;
@@ -282,14 +282,17 @@ canvas {
 /* Solo link */
 #solo-link {
   display: inline-block;
-  margin-top: 12px;
-  padding: 6px 18px;
-  border: 1px solid rgba(170,204,255,0.4);
-  border-radius: 8px;
+  width: 200px;
+  padding: 14px;
+  font-size: 18px;
+  font-weight: bold;
+  border-radius: 12px;
+  border: 2px solid rgba(170,204,255,0.4);
   background: transparent;
   color: #aaccff;
-  font-size: 13px;
   text-decoration: none;
+  text-align: center;
+  box-sizing: border-box;
   transition: border-color 0.2s, color 0.2s;
 }
 #solo-link:hover { border-color: #aaccff; color: #fff; }
