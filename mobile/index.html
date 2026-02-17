@@ -234,14 +234,15 @@ document.querySelectorAll('.atk-btn').forEach(btn => {
   }, { passive: false });
 });
 
-// Tap on canvas for start/retry
+// Tap anywhere for start/back-to-title
 let tapAction = false;
-canvas.addEventListener('touchstart', (e) => {
-  e.preventDefault();
+document.addEventListener('touchstart', (e) => {
   if (gameState === STATE.TITLE || gameState === STATE.WIN || gameState === STATE.LOSE || gameState === STATE.DRAW) {
+    // Ignore taps on keybind button/overlay
+    if (e.target.closest('#keybind-btn, #keybind-overlay')) return;
     tapAction = true;
   }
-}, { passive: false });
+}, { passive: true });
 
 // Seeded PRNG (mulberry32) for damage calculation
 function mulberry32(seed) {
