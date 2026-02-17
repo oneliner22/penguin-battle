@@ -185,7 +185,7 @@ let battleTimeUp = false;
 
 // Keys (for keyboard fallback)
 const keys = {};
-window.addEventListener('keydown', e => { keys[e.key] = true; e.preventDefault(); });
+window.addEventListener('keydown', e => { if (!e.repeat) keys[e.key] = true; e.preventDefault(); });
 window.addEventListener('keyup', e => { keys[e.key] = false; });
 
 // Touch state
