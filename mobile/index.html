@@ -110,7 +110,6 @@ canvas {
   border: 1px solid rgba(74,144,217,0.4);
   cursor: pointer;
   z-index: 15;
-  display: none;
 }
 #keybind-overlay {
   display: none;
@@ -234,11 +233,11 @@ document.querySelectorAll('.atk-btn').forEach(btn => {
 });
 
 // Tap on canvas for start/retry
+let tapAction = false;
 canvas.addEventListener('touchstart', (e) => {
   e.preventDefault();
   if (gameState === STATE.TITLE || gameState === STATE.WIN || gameState === STATE.LOSE || gameState === STATE.DRAW) {
-    keys[' '] = true;
-    setTimeout(() => { keys[' '] = false; }, 100);
+    tapAction = true;
   }
 }, { passive: false });
 
@@ -877,10 +876,12 @@ function drawTitle() {
     ctx.fillText('Tap to Start!', 400, 420);
   }
 
-  if (keys[' '] || keys['Enter']) {
+  if (tapAction || keys[' '] || keys['Enter']) {
+    tapAction = false;
+    keys[' '] = false;
+    keys['Enter'] = false;
     gameState = STATE.BATTLE;
     resetBattle();
-    keybindBtn.style.display = 'block';
   }
 }
 
@@ -1024,12 +1025,12 @@ function drawResult() {
     ctx.fillText('Tap to go back', 400, 330);
   }
 
-  if (keys[' '] || keys['Enter']) {
+  if (tapAction || keys[' '] || keys['Enter']) {
+    tapAction = false;
     keys[' '] = false;
     keys['Enter'] = false;
     gameState = STATE.TITLE;
     resetBattle();
-    keybindBtn.style.display = 'none';
     keybindOverlay.classList.remove('show');
   }
 }
