@@ -1031,9 +1031,8 @@ function drawResult() {
     tapAction = false;
     keys[' '] = false;
     keys['Enter'] = false;
-    gameState = STATE.TITLE;
-    resetBattle();
-    keybindOverlay.classList.remove('show');
+    // Go back to PvP lobby
+    window.location.href = '../pvp/';
   }
 }
 
