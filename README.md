@@ -59,7 +59,7 @@ flowchart TD
         C2("Player 2<br/>Browser"):::client
     end
 
-    CF("CloudFront<br/>+ WAF"):::edge
+    CF("CloudFront"):::edge
 
     subgraph AWS["AWS ap-northeast-1"]
         APIGW("API Gateway<br/>WebSocket"):::server
@@ -67,24 +67,17 @@ flowchart TD
         Message("Lambda<br/>message.js"):::server
         Disconnect("Lambda<br/>disconnect.js"):::server
         Dashboard("Lambda<br/>dashboard.js"):::server
-        WafSync("Lambda<br/>waf-sync.js"):::server
         Rooms[("DynamoDB<br/>Rooms")]:::db
         Throttle[("DynamoDB<br/>Throttle")]:::db
         GameLog[("DynamoDB<br/>GameLog")]:::db
     end
 
-    subgraph WAF_Region["AWS us-east-1"]
-        WAF("WAF<br/>IP Set"):::edge
-    end
-
     C1 & C2 <-->|WebSocket| CF
     CF <-->|Proxy| APIGW
-    CF -.->|Block| WAF
     APIGW --> Connect & Message & Disconnect
     Connect & Message --> Rooms
+    Connect --> Throttle
     Message --> Throttle & GameLog
-    Throttle -->|DynamoDB Stream| WafSync
-    WafSync -->|Sync banned IPs| WAF
     Dashboard -->|Read| Rooms & Throttle & GameLog
 ```
 
@@ -94,16 +87,16 @@ flowchart TD
 |---------|------|
 | フロントエンド | HTML5 Canvas + Vanilla JS (単一HTMLファイル) |
 | 通信 | WebSocket (API Gateway) |
-| エッジ | CloudFront + AWS WAF |
+| エッジ | CloudFront |
 | バックエンド | AWS Lambda (Node.js 20.x) |
 | データストア | DynamoDB (PAY_PER_REQUEST) |
 | IaC | CloudFormation (2スタック: ap-northeast-1 + us-east-1) |
 
 ### セキュリティ
 
-- **レート制限**: 接続数・メッセージ頻度のスロットリング
-- **IP自動BAN**: 異常アクセス検知 → DynamoDB → WAF IP Set 自動同期
-- **エッジブロック**: CloudFront + WAF で BAN済みIPをLambda到達前に遮断
+- **レート制限**: 接続数 (30/min/IP) ・メッセージ頻度 (5%サンプリング) のスロットリング
+- **IP自動BAN**: 異常アクセス検知 → DynamoDB に BAN レコード → connect.js で接続拒否
+- **API Gateway スロットリング**: 500 burst / 300 rate でグローバル保護
 - **ルームコード認証**: 6文字ランダムコード (紛らわしい文字除外)
 
 ---
@@ -121,14 +114,13 @@ penguin-battle/
 ├── pvp_architecture.html   # アーキテクチャ図 (Mermaid)
 ├── server/
 │   ├── template.yaml       # CloudFormation (メインスタック)
-│   ├── template-waf.yaml   # CloudFormation (WAFスタック: us-east-1)
+│   ├── template-waf.yaml   # CloudFormation (CloudFrontスタック: us-east-1)
 │   ├── deploy.ps1          # デプロイスクリプト
 │   └── src/
-│       ├── connect.js      # WebSocket接続ハンドラ
+│       ├── connect.js      # WebSocket接続 + レートリミット + BAN判定
 │       ├── message.js      # ゲームロジック + 状態管理
 │       ├── disconnect.js   # 切断ハンドラ
-│       ├── dashboard.js    # 管理API (IPホワイトリスト)
-│       └── waf-sync.js     # DynamoDB Stream → WAF IP Set 同期
+│       └── dashboard.js    # 管理API (IPホワイトリスト)
 └── README.md
 ```
 
@@ -144,10 +136,9 @@ cd server
 .\deploy.ps1
 ```
 
-3段階デプロイ:
+2段階デプロイ:
 1. **メインスタック** (ap-northeast-1) — API Gateway, Lambda, DynamoDB
-2. **WAFスタック** (us-east-1) — CloudFront, WAF, IP Set
-3. **メインスタック更新** — WAF設定の反映 + Lambda コード更新
+2. **CloudFrontスタック** (us-east-1) — CloudFront + Lambda コード更新
 
 ---
 

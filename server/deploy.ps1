@@ -22,7 +22,7 @@ aws cloudformation deploy `
   --stack-name $STACK_NAME `
   --region $REGION `
   --capabilities CAPABILITY_NAMED_IAM `
-  --parameter-overrides "CodeBucket=${BUCKET}" "CodeKey=${CODE_KEY}" "WAFIPSetId=" "WAFIPSetName=" "AdminIPs=${ADMIN_IPS}"
+  --parameter-overrides "CodeBucket=${BUCKET}" "CodeKey=${CODE_KEY}" "AdminIPs=${ADMIN_IPS}"
 
 Write-Host "=== Getting API Gateway domain ===" -ForegroundColor Cyan
 $apiDomain = aws cloudformation describe-stacks `
@@ -41,42 +41,19 @@ aws cloudformation deploy `
   --region $WAF_REGION `
   --parameter-overrides "ApiGatewayDomain=${apiDomain}"
 
-Write-Host "=== Getting WAF outputs ===" -ForegroundColor Cyan
-$ipSetId = aws cloudformation describe-stacks `
-  --stack-name $WAF_STACK_NAME `
-  --region $WAF_REGION `
-  --query "Stacks[0].Outputs[?OutputKey=='IPSetId'].OutputValue" `
-  --output text
-
-$ipSetName = aws cloudformation describe-stacks `
-  --stack-name $WAF_STACK_NAME `
-  --region $WAF_REGION `
-  --query "Stacks[0].Outputs[?OutputKey=='IPSetName'].OutputValue" `
-  --output text
-
+Write-Host "=== Getting CloudFront outputs ===" -ForegroundColor Cyan
 $cfDomain = aws cloudformation describe-stacks `
   --stack-name $WAF_STACK_NAME `
   --region $WAF_REGION `
   --query "Stacks[0].Outputs[?OutputKey=='CloudFrontDomain'].OutputValue" `
   --output text
 
-Write-Host "IPSet ID: $ipSetId" -ForegroundColor Green
-Write-Host "IPSet Name: $ipSetName" -ForegroundColor Green
 Write-Host "CloudFront Domain: $cfDomain" -ForegroundColor Green
-
-Write-Host "=== Step 3: Update main stack with WAF config ===" -ForegroundColor Cyan
-aws cloudformation deploy `
-  --template-file (Join-Path $PSScriptRoot "template.yaml") `
-  --stack-name $STACK_NAME `
-  --region $REGION `
-  --capabilities CAPABILITY_NAMED_IAM `
-  --parameter-overrides "CodeBucket=${BUCKET}" "CodeKey=${CODE_KEY}" "WAFIPSetId=${ipSetId}" "WAFIPSetName=${ipSetName}" "AdminIPs=${ADMIN_IPS}"
 
 Write-Host "=== Updating Lambda function code ===" -ForegroundColor Cyan
 aws lambda update-function-code --function-name PenguinBattle-Connect --s3-bucket $BUCKET --s3-key $CODE_KEY --region $REGION --output text --query 'LastModified'
 aws lambda update-function-code --function-name PenguinBattle-Message --s3-bucket $BUCKET --s3-key $CODE_KEY --region $REGION --output text --query 'LastModified'
 aws lambda update-function-code --function-name PenguinBattle-Disconnect --s3-bucket $BUCKET --s3-key $CODE_KEY --region $REGION --output text --query 'LastModified'
-aws lambda update-function-code --function-name PenguinBattle-WafSync --s3-bucket $BUCKET --s3-key $CODE_KEY --region $REGION --output text --query 'LastModified'
 aws lambda update-function-code --function-name PenguinBattle-Dashboard --s3-bucket $BUCKET --s3-key $CODE_KEY --region $REGION --output text --query 'LastModified'
 
 Write-Host "=== Getting Dashboard API URL ===" -ForegroundColor Cyan
